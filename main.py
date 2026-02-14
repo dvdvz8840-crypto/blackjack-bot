@@ -4,7 +4,7 @@ import random
 import threading
 import time
 
-TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"
+TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
 bot = telebot.TeleBot(TOKEN)
 
 games = {}
@@ -12,7 +12,6 @@ balances = {}
 START_BALANCE = 500
 MAX_PLAYERS = 9
 WAIT_TIME = 120  # 2 минуты ожидания набора игроков
-
 SUITS = ['♠️','♥️','♦️','♣️']
 
 # ================== Карты ==================
@@ -92,36 +91,58 @@ def join_table(message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name
     game = games.get(chat_id)
-    if not game: return
+    if not game: 
+        return
     if len(game["players"]) >= MAX_PLAYERS:
         bot.send_message(chat_id,"🚫 Стол уже заполнен!")
         return
-    if balances.get(user_id,0)<=0:
+    if balances.get(user_id, 0) <= 0:
         bot.send_message(chat_id,"❌ У вас недостаточно средств, чтобы присоединиться.")
         bot.send_message(chat_id,"", reply_markup=types.ReplyKeyboardRemove())
         return
-    msg = bot.send_message(chat_id,f"{user_name}, введите вашу ставку:")
+    # Просим игрока ввести ставку
+    msg = bot.send_message(chat_id, f"{user_name}, введите вашу ставку:")
     bot.register_next_step_handler(msg, set_bet, game, user_id, user_name)
 
 def set_bet(message, game, user_id, user_name):
     try:
         bet = int(message.text)
-        if bet<=0 or bet>balances[user_id]:
-            bot.send_message(message.chat.id,"❌ Ставка должна быть числом и не превышать баланс.")
+        if bet <= 0 or bet > balances[user_id]:
+            bot.send_message(message.chat.id, "❌ Ставка должна быть числом и не превышать баланс.")
             return
     except:
-        bot.send_message(message.chat.id,"❌ Ставка должна быть числом.")
+        bot.send_message(message.chat.id, "❌ Ставка должна быть числом.")
         return
-    balances[user_id]-=bet
-    game["players"].append({"id":user_id,"name":user_name,"hand":[],"bet":bet,"stand":False,"cashout=False})
-    bot.send_message(message.chat.id,f"🪑 {user_name} присоединился за стол со ставкой {bet}.")
+
+    # Добавляем игрока в список
+    game["players"].append({
+        "id": user_id,
+        "name": user_name,
+        "hand": [],
+        "bet": bet,
+        "stand": False,
+        "cashout": False
+    })
+
+    # Вычитаем ставку из баланса
+    balances[user_id] -= bet
+
+    # Подтверждаем присоединение
+    bot.send_message(message.chat.id, f"🪑 {user_name} присоединился за стол со ставкой {bet}.")
+
+    # Убираем кнопку присоединения
     bot.send_message(message.chat.id,"", reply_markup=types.ReplyKeyboardRemove())
-    send_vote_buttons(chat_id, user_id)
+
+    # Показываем игроку кнопки для действий во время игры
+    send_vote_buttons(message.chat.id, user_id)
+
+    # Если стол заполнен, стартуем игру через 10 секунд
     if len(game["players"]) == MAX_PLAYERS:
-        bot.send_message(chat_id,"Игра скоро начнется, дилер раздает карты…")
-        threading.Timer(10, start_game, args=[chat_id]).start()
+        bot.send_message(message.chat.id, "Игра скоро начнется, дилер раздает карты…")
+        threading.Timer(10, start_game, args=[message.chat.id]).start()
     else:
-        threading.Thread(target=wait_and_start, args=[chat_id]).start()
+        # Запускаем таймер ожидания остальных игроков
+        threading.Thread(target=wait_and_start, args=[message.chat.id]).start()
 
 # ================== Таймер ожидания ==================
 def wait_and_start(chat_id):
@@ -235,3 +256,5 @@ def end_game(chat_id):
             bot.send_message(chat_id,f"{p['name']} проиграл.")
     game["ended"]=True
     games.pop(chat_id)
+
+bot.infinity_polling()
