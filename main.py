@@ -841,13 +841,15 @@ def mines_move(message):
                      f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.\n"
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
-# ===================== ДУЭЛИ 1v1 =====================
+# ================== ДУЭЛИ 1VS1 ==================
+duels = {}
 
-duels = {}  # chat_id -> duel data
-
+def duel_update_balance(user_id, amount):
+    balance = get_balance(user_id)
+    update_balance(user_id, balance + amount)
 
 @bot.message_handler(commands=['бдуэль'])
-def start_duel(message):
+def duel_command(message):
     ensure_username(message)
 
     parts = message.text.split()
@@ -855,29 +857,24 @@ def start_duel(message):
         bot.send_message(message.chat.id, "❗ Используй: /бдуэль @username ставка")
         return
 
-    target_username = parts[1].lstrip("@").lower()
+    opponent_username = parts[1].replace("@", "").lower()
 
-    if not parts[2].isdigit():
-        bot.send_message(message.chat.id, "❗ Ставка должна быть числом")
-        return
-
-    bet = int(parts[2])
-    if bet < 100:
-        bot.send_message(message.chat.id, "❗ Минимальная ставка 100")
+    try:
+        bet = int(parts[2])
+        if bet <= 0:
+            raise ValueError
+    except:
+        bot.send_message(message.chat.id, "❗ Ставка должна быть положительным числом")
         return
 
     player_id = message.from_user.id
     player_balance = get_balance(player_id)
 
-    if player_balance < bet:
-        bot.send_message(message.chat.id, "❌ Недостаточно средств")
-        return
-
-    cursor.execute("SELECT user_id, balance FROM users WHERE LOWER(username)=?", (target_username,))
+    cursor.execute("SELECT user_id, balance FROM users WHERE LOWER(username)=?", (opponent_username,))
     row = cursor.fetchone()
 
     if not row:
-        bot.send_message(message.chat.id, f"❌ Игрок @{target_username} не найден")
+        bot.send_message(message.chat.id, "❌ Игрок не найден")
         return
 
     opponent_id, opponent_balance = row
@@ -886,15 +883,19 @@ def start_duel(message):
         bot.send_message(message.chat.id, "❌ Нельзя вызвать себя")
         return
 
+    if player_balance < bet:
+        bot.send_message(message.chat.id, "❌ Недостаточно средств")
+        return
+
     if opponent_balance < bet:
-        bot.send_message(message.chat.id, "❌ У противника недостаточно средств")
+        bot.send_message(message.chat.id, "❌ У соперника недостаточно средств")
         return
 
     if message.chat.id in duels:
-        bot.send_message(message.chat.id, "⚠ В чате уже идет дуэль")
+        bot.send_message(message.chat.id, "⚠ В этом чате уже идет дуэль")
         return
 
-    # списываем ставку
+    # списываем ставки
     update_balance(player_id, player_balance - bet)
     update_balance(opponent_id, opponent_balance - bet)
 
@@ -902,7 +903,7 @@ def start_duel(message):
         "players": [player_id, opponent_id],
         "turn": player_id,
         "bet": bet,
-        "last_action": {}
+        "shield": {}
     }
 
     send_duel_message(message.chat.id)
@@ -914,54 +915,54 @@ def send_duel_message(chat_id):
 
     markup = types.InlineKeyboardMarkup()
     markup.row(
-        types.InlineKeyboardButton("🔫 Выстрел", callback_data=f"duel_shoot_{turn}"),
-        types.InlineKeyboardButton("🛡 Защититься", callback_data=f"duel_shield_{turn}")
+        types.InlineKeyboardButton("🔫 Выстрел", callback_data="duel_shoot"),
+        types.InlineKeyboardButton("🛡 Защититься", callback_data="duel_shield")
     )
 
     bot.send_message(
         chat_id,
-        f"⚔ Дуэль началась!\n\n"
+        f"⚔ <b>Дуэль началась!</b>\n"
         f"💰 Ставка: {duel['bet']}\n\n"
-        f"Ход игрока ID: {turn}",
+        f"Ход игрока: <code>{turn}</code>",
+        parse_mode="HTML",
         reply_markup=markup
     )
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("duel_"))
-def duel_actions(call):
+def duel_callback(call):
     chat_id = call.message.chat.id
 
     if chat_id not in duels:
         return
 
     duel = duels[chat_id]
-    turn = duel["turn"]
+    player_id = call.from_user.id
 
-    data = call.data.split("_")
-    action = data[1]
-    player_id = int(data[2])
-
-    if call.from_user.id != turn:
-        bot.answer_callback_query(call.id, "⚠ Сейчас не твой ход")
+    if player_id != duel["turn"]:
+        bot.answer_callback_query(call.id, "⛔ Сейчас не твой ход")
         return
 
-    opponent = [p for p in duel["players"] if p != turn][0]
+    opponent = [p for p in duel["players"] if p != player_id][0]
 
+    action = call.data.split("_")[1]
+
+    # Если выстрел
     if action == "shoot":
-        last_def = duel["last_action"].get(opponent)
-
-        chance = 35 if last_def == "shield" else 50
+        shielded = duel["shield"].get(opponent, False)
+        chance = 35 if shielded else 50
 
         if random.randint(1, 100) <= chance:
-            win = duel["bet"] * 2
-            balance = get_balance(turn)
-            update_balance(turn, balance + win)
+            win_amount = duel["bet"] * 2
+            duel_update_balance(player_id, win_amount)
 
             bot.edit_message_text(
-                f"🎉 Победил игрок ID {turn}\n"
-                f"💰 Выигрыш: {win}",
+                f"🎯 Выстрел попал!\n\n"
+                f"🏆 Победитель: <code>{player_id}</code>\n"
+                f"💰 Выигрыш: {win_amount}",
                 chat_id,
-                call.message.message_id
+                call.message.message_id,
+                parse_mode="HTML"
             )
 
             del duels[chat_id]
@@ -969,11 +970,15 @@ def duel_actions(call):
         else:
             bot.answer_callback_query(call.id, "❌ Промах")
 
+    # Если защита
     if action == "shield":
-        duel["last_action"][turn] = "shield"
+        duel["shield"][player_id] = True
         bot.answer_callback_query(call.id, "🛡 Ты защитился")
 
+    # Передаем ход
     duel["turn"] = opponent
+    duel["shield"][player_id] = False
+
     send_duel_message(chat_id)
     
 # ------------------- Безопасный запуск бота -------------------
