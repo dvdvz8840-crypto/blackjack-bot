@@ -844,7 +844,7 @@ duels = {}  # активные дуэли: chat_id -> duel
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower().startswith("бдуэль"))
 def start_duel(message):
-    ensure_username(message)
+    ensure_username(message)  # если у тебя есть функция, которая создает username
 
     parts = message.text.strip().split()
     if len(parts) < 3:
@@ -957,5 +957,38 @@ def duel_action(call):
     duel.setdefault("actions", {})[turn_id] = action_type
     duel["turn"] = opponent_id
     send_duel_status(chat_id)
-# ---------------- Запуск ----------------
-bot.infinity_polling()
+
+# ------------------- Безопасный запуск бота -------------------
+import sys
+import time
+import telebot
+
+def safe_start(bot):
+    """
+    Безопасный запуск бота с проверкой на конфликты getUpdates (409).
+    """
+    try:
+        bot.remove_webhook()
+        print("[INFO] Старый webhook удален, запускаем polling...")
+
+        while True:
+            try:
+                bot.infinity_polling(timeout=10, long_polling_timeout=30)
+            except telebot.apihelper.ApiTelegramException as e:
+                if "409" in str(e):
+                    print("[WARNING] Конфликт getUpdates. Удаляем webhook и перезапускаем...")
+                    bot.remove_webhook()
+                    time.sleep(2)
+                    continue
+                else:
+                    print("[ERROR]", e)
+                    time.sleep(5)
+            except Exception as ex:
+                print("[ERROR]", ex)
+                time.sleep(5)
+    except KeyboardInterrupt:
+        print("\n[INFO] Бот остановлен пользователем")
+        sys.exit()
+
+# ----------------- Запуск бота -----------------
+safe_start(bot)
