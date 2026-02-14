@@ -14,8 +14,9 @@ MAX_PLAYERS = 9
 WAIT_TIME = 120  # 2 минуты ожидания
 games = {}       # Данные по играм
 balances = {}    # Баланс пользователей
+cooldowns = {}   # КД на команды
 
-# ================== Функции ==================
+# ================== Вспомогательные функции ==================
 def create_deck():
     deck = [2,3,4,5,6,7,8,9,10,10,10,10,11]*4
     random.shuffle(deck)
@@ -43,7 +44,28 @@ def cmd_balance(message):
         balances[user_id] = START_BALANCE
     bot.send_message(message.chat.id,f"💰 Твой баланс: {balances[user_id]}")
 
-# ================== Начало игры ==================
+@bot.message_handler(func=lambda m: m.text.lower() == "бкоманды")
+def cmd_help(message):
+    user_id = message.from_user.id
+    now = time.time()
+    if user_id in cooldowns and now < cooldowns[user_id]:
+        bot.send_message(message.chat.id,f"⏳ Подождите {int(cooldowns[user_id]-now)} секунд перед повтором команды.")
+        return
+    cooldowns[user_id] = now + 20
+    help_text = (
+        "🎲 Команды бота:\n"
+        "б - приветствие и баланс по умолчанию\n"
+        "бал - проверить баланс\n"
+        "блек - начать набор за стол\n"
+        "доб - взять карту\n"
+        "стоп - остановиться\n"
+        "кэш - забрать 70% ставки\n"
+        "п - передача монет (использовать через reply на сообщение игрока)\n"
+        "выйти - выйти со стола и вернуть ставку"
+    )
+    bot.send_message(message.chat.id,help_text)
+
+# ================== Набор игроков ==================
 @bot.message_handler(func=lambda m: m.text.lower() == "блек")
 def cmd_blackjack(message):
     chat_id = message.chat.id
@@ -51,7 +73,6 @@ def cmd_blackjack(message):
         games[chat_id] = {"players": [], "deck": create_deck(), "started": False, "wait_timer": False}
     bot.send_message(chat_id,"🎲 Набор игроков. Если хочешь сесть за стол, напиши 'да'.")
 
-# ================== Игрок пишет "да" ==================
 @bot.message_handler(func=lambda m: m.text.lower() == "да")
 def join_request(message):
     chat_id = message.chat.id
@@ -61,6 +82,9 @@ def join_request(message):
     user_id = message.from_user.id
     if any(p['id']==user_id for p in game["players"]):
         bot.send_message(chat_id,"🚫 Вы уже за столом.")
+        return
+    if balances.get(user_id, START_BALANCE)<=0:
+        bot.send_message(chat_id,"❌ У вас недостаточно средств, чтобы присоединиться.")
         return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("Присоединиться к столу")
@@ -79,14 +103,12 @@ def join_table(message):
     if any(p['id']==user_id for p in game["players"]):
         bot.send_message(chat_id,"🚫 Вы уже за столом.")
         return
-    if balances.get(user_id, START_BALANCE) <= 0:
+    if balances.get(user_id, START_BALANCE)<=0:
         bot.send_message(chat_id,"❌ У вас недостаточно средств, чтобы присоединиться.")
         return
-
     # убираем кнопку только у этого игрока
     bot.send_message(chat_id,"", reply_markup=types.ReplyKeyboardRemove())
-
-    # добавляем игрока с пустой ставкой
+    # Добавляем игрока с пустой ставкой
     game["players"].append({
         "id": user_id,
         "name": user_name,
@@ -95,19 +117,18 @@ def join_table(message):
         "stand": False,
         "cashout": False
     })
-
-    # запрос ставки
+    # Запрос ставки
     msg = bot.send_message(chat_id,f"🪙 {user_name}, введите вашу ставку:")
     bot.register_next_step_handler(msg, partial(set_bet, game=game, user_index=len(game["players"])-1))
 
-# ================== Ставка ==================
+# ================== Установка ставки ==================
 def set_bet(message, game, user_index):
     player = game["players"][user_index]
     user_id = player["id"]
     user_name = player["name"]
     try:
         bet = int(message.text)
-        if bet <= 0 or bet > balances.get(user_id, START_BALANCE):
+        if bet<=0 or bet>balances.get(user_id, START_BALANCE):
             raise ValueError
     except:
         msg = bot.send_message(message.chat.id,f"❌ Ставка должна быть числом и не больше вашего баланса, {user_name}")
@@ -116,10 +137,9 @@ def set_bet(message, game, user_index):
     balances[user_id] -= bet
     player["bet"] = bet
     bot.send_message(message.chat.id,f"💰 {user_name}, ваша ставка принята: {bet} монет.\nОжидание других участников…")
-
-    # Запускаем таймер ожидания только один раз
+    # Запуск таймера ожидания
     if not game.get("wait_timer"):
-        game["wait_timer"] = True
+        game["wait_timer"]=True
         threading.Thread(target=wait_and_start, args=[message.chat.id]).start()
 
 # ================== Таймер ожидания ==================
@@ -129,7 +149,7 @@ def wait_and_start(chat_id):
         return
     start = time.time()
     while time.time()-start < WAIT_TIME:
-        if len(game["players"]) >= MAX_PLAYERS:
+        if len(game["players"])>=MAX_PLAYERS:
             break
         time.sleep(1)
     if not game["started"]:
@@ -141,10 +161,10 @@ def start_game(chat_id):
     game = games.get(chat_id)
     if not game:
         return
-    game["started"] = True
-    game["dealer_hand"] = [game["deck"].pop(), game["deck"].pop()]
+    game["started"]=True
+    game["dealer_hand"]=[game["deck"].pop(),game["deck"].pop()]
     for p in game["players"]:
-        p["hand"] = [game["deck"].pop(), game["deck"].pop()]
+        p["hand"]=[game["deck"].pop(),game["deck"].pop()]
         bot.send_message(chat_id,f"{p['name']} карты: {p['hand']} (Очки: {calculate_score(p['hand'])})")
     bot.send_message(chat_id,"🃏 Игра началась! Используйте команды: доб / стоп / кэш")
 
@@ -160,23 +180,22 @@ def game_commands(message):
     player = next((p for p in game["players"] if p["id"]==user_id), None)
     if not player:
         return
-    if cmd == "доб":
+    if cmd=="доб":
         player["hand"].append(game["deck"].pop())
         score = calculate_score(player["hand"])
-        if score > 21:
+        if score>21:
             bot.send_message(chat_id,f"{player['name']} перебор! {score}. Вы проиграли.")
-            player["stand"] = True
+            player["stand"]=True
         else:
             bot.send_message(chat_id,f"{player['name']} карты: {player['hand']} (Очки: {score})")
-    elif cmd == "стоп":
-        player["stand"] = True
+    elif cmd=="стоп":
+        player["stand"]=True
         bot.send_message(chat_id,f"{player['name']} остановился.")
-    elif cmd == "кэш":
-        player["stand"] = True
+    elif cmd=="кэш":
+        player["stand"]=True
         cash = int(player["bet"]*0.7)
-        balances[user_id] += cash
+        balances[user_id]+=cash
         bot.send_message(chat_id,f"{player['name']} забрал 70% ставки: {cash}")
-    # Проверка конца игры
     if all(p["stand"] for p in game["players"]):
         end_game(chat_id)
 
@@ -191,13 +210,13 @@ def end_game(chat_id):
     for p in game["players"]:
         score = calculate_score(p["hand"])
         text += f"{p['name']}: {score}\n"
-        if score <= 21:
-            if dealer_score > 21 or score > dealer_score:
+        if score<=21:
+            if dealer_score>21 or score>dealer_score:
                 winners.append(p)
-            elif score == dealer_score:
+            elif score==dealer_score:
                 bot.send_message(chat_id,f"{p['name']} ничья с дилером!")
     for w in winners:
-        balances[w["id"]] += w["bet"]*2
+        balances[w["id"]]+=w["bet"]*2
         text += f"🏆 Победил {w['name']} (+{w['bet']*2})\n"
     bot.send_message(chat_id,text)
     del games[chat_id]
