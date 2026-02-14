@@ -237,6 +237,7 @@ def blackjack(message):
                      reply_markup=game_keyboard(can_double=True))
 
 # ---------------- Игровые кнопки ----------------
+# ---------------- Игровые кнопки BlackJack ----------------
 @bot.callback_query_handler(func=lambda c: c.data in ["hit", "stand", "cash", "double"])
 def game_actions(callback):
     user_id = callback.from_user.id
@@ -255,7 +256,7 @@ def game_actions(callback):
         if hand_value(player) > 21:
             del games[user_id]
             bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                                  text=f"💥 <b>Перебор!</b>\n\nТвои карты: {player} ({hand_value(player)})\n\nТы проиграл {bet} монет.",
+                                  text=f"💥 Перебор!\n\nТвои карты: {player} ({hand_value(player)})\n\nТы проиграл {bet} монет.",
                                   parse_mode="HTML")
             return
         bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
@@ -268,15 +269,17 @@ def game_actions(callback):
         player_val = hand_value(player)
         dealer_val = hand_value(dealer)
         balance = get_balance(user_id)
+
         if dealer_val > 21 or player_val > dealer_val:
             win = bet * 2
             update_balance(user_id, balance + win)
-            text = f"🎉 <b>Ты выиграл!</b>\n+{win} монет"
+            text = f"🎉 Ты выиграл!\n+{win} монет"
         elif player_val == dealer_val:
             update_balance(user_id, balance + bet)
             text = "🤝 Ничья. Ставка возвращена."
         else:
             text = f"😢 Ты проиграл {bet} монет."
+
         del games[user_id]
         bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
                               text=f"{text}\n\n🃏 {player} ({player_val})\n🎴 {dealer} ({dealer_val})", parse_mode="HTML")
