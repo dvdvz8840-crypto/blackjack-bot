@@ -30,8 +30,8 @@ def calculate_score(hand):
     return score
 
 
-@bot.message_handler(commands=['start'])
-def start(message):
+@bot.message_handler(commands=['блек'])
+def блек(message):
     user_id = message.from_user.id
     if user_id not in balances:
         balances[user_id] = START_BALANCE
