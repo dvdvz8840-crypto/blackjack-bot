@@ -14,41 +14,22 @@ cooldowns = {}
 START_BALANCE = 500
 COOLDOWN_TIME = 120
 WAIT_TIME = 120
+ACTION_TIMEOUT = 180
 MAX_PLAYERS = 9
-
-SUITS = ['♠️','♥️','♦️','♣️']
 
 # ================= КАРТЫ =================
 
 def create_deck():
-    deck = []
-    for suit in SUITS:
-        for card in [2,3,4,5,6,7,8,9,10,'J','Q','K','A']:
-            deck.append((str(card), suit))
+    deck = [2,3,4,5,6,7,8,9,10,10,10,10,11]*4
     random.shuffle(deck)
     return deck
 
-def card_value(card):
-    if card[0] in ['J','Q','K']:
-        return 10
-    if card[0] == 'A':
-        return 11
-    if card[0] == 'A1':
-        return 1
-    return int(card[0])
-
 def calculate_score(hand):
-    score = sum(card_value(c) for c in hand)
-    while score > 21 and any(c[0]=='A' for c in hand):
-        for i,c in enumerate(hand):
-            if c[0]=='A':
-                hand[i]=('A1',c[1])
-                break
-        score = sum(card_value(c) for c in hand)
+    score = sum(hand)
+    while score > 21 and 11 in hand:
+        hand[hand.index(11)] = 1
+        score = sum(hand)
     return score
-
-def format_hand(hand):
-    return ' '.join(f"{c[0]}{c[1]}" for c in hand)
 
 # ================= КНОПКИ =================
 
@@ -61,26 +42,20 @@ def player_keyboard():
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower()=="б")
 def start_cmd(m):
-    uid=m.from_user.id
+    uid = m.from_user.id
     if uid not in balances:
-        balances[uid]=START_BALANCE
-    bot.send_message(m.chat.id,f"🎮 Привет! Баланс: {balances[uid]}")
+        balances[uid] = START_BALANCE
+    bot.send_message(m.chat.id,f"🎮 Баланс: {balances[uid]}")
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower()=="бал")
 def bal_cmd(m):
-    uid=m.from_user.id
-    if uid not in balances:
-        balances[uid]=START_BALANCE
+    uid = m.from_user.id
+    balances.setdefault(uid, START_BALANCE)
     bot.send_message(m.chat.id,f"💰 Баланс: {balances[uid]}")
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower()=="бкоманды")
 def help_cmd(m):
-    bot.send_message(m.chat.id,
-                     "Команды:\n"
-                     "б\n"
-                     "бал\n"
-                     "блек\n"
-                     "п (сумма)")
+    bot.send_message(m.chat.id,"Команды:\nб\nбал\nблек\nп (сумма)")
 
 # ================= ПЕРЕВОД =================
 
@@ -88,40 +63,40 @@ def help_cmd(m):
 def transfer(m):
     if not m.reply_to_message:
         return
-    sender=m.from_user.id
-    receiver=m.reply_to_message.from_user.id
+    sender = m.from_user.id
+    receiver = m.reply_to_message.from_user.id
+
     try:
-        amount=int(m.text.split()[1])
+        amount = int(m.text.split()[1])
     except:
         return
-    if balances.get(sender,0)<amount:
-        bot.send_message(m.chat.id,f"У вас нет {amount}, чтобы передать.")
+
+    if balances.get(sender,0) < amount:
+        bot.send_message(m.chat.id,"Недостаточно средств.")
         return
-    balances[sender]-=amount
-    balances[receiver]=balances.get(receiver,START_BALANCE)+amount
+
+    balances[sender] -= amount
+    balances[receiver] = balances.get(receiver,START_BALANCE)+amount
     bot.send_message(m.chat.id,f"Перевод {amount} выполнен.")
 
 # ================= НАЧАТЬ ИГРУ =================
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower()=="блек")
 def start_black(m):
-    chat_id=m.chat.id
-    now=time.time()
+    chat_id = m.chat.id
     if chat_id in games:
         bot.send_message(chat_id,"Игра уже идет.")
         return
-    if m.from_user.id in cooldowns and now<cooldowns[m.from_user.id]:
-        bot.send_message(chat_id,"Подождите 2 минуты перед новой игрой.")
-        return
 
-    games[chat_id]={
-        "players":[],
-        "deck":create_deck(),
-        "started":False,
-        "turn":0
+    games[chat_id] = {
+        "players": [],
+        "deck": create_deck(),
+        "started": False,
+        "turn": 0,
+        "last_action": time.time()
     }
 
-    markup=types.ReplyKeyboardMarkup(resize_keyboard=True,one_time_keyboard=True)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True,one_time_keyboard=True)
     markup.add("Сесть за стол")
     bot.send_message(chat_id,"Набор игроков начат (макс 9).",reply_markup=markup)
 
@@ -131,109 +106,132 @@ def start_black(m):
 
 @bot.message_handler(func=lambda m: m.text=="Сесть за стол")
 def join(m):
-    chat_id=m.chat.id
-    uid=m.from_user.id
-    name=m.from_user.first_name
+    chat_id = m.chat.id
+    uid = m.from_user.id
+    name = m.from_user.first_name
 
-    game=games.get(chat_id)
+    game = games.get(chat_id)
     if not game or game["started"]:
-        return
-    if len(game["players"])>=MAX_PLAYERS:
-        return
-    if balances.get(uid,0)<=0:
-        bot.send_message(chat_id,"Недостаточно средств.")
         return
 
     bot.send_message(chat_id,"Введите ставку:",reply_markup=types.ReplyKeyboardRemove())
-    msg=bot.send_message(chat_id,"💰 Ваша ставка?")
-    bot.register_next_step_handler(msg,set_bet,game,uid,name)
+    msg = bot.send_message(chat_id,"💰 Ваша ставка?")
+    bot.register_next_step_handler(msg,set_bet,chat_id,uid,name)
 
-def set_bet(message,game,uid,name):
-    try:
-        bet=int(message.text)
-        if bet<=0 or bet>balances[uid]:
-            return
-    except:
+def set_bet(message,chat_id,uid,name):
+    game = games.get(chat_id)
+    if not game:
         return
 
-    balances[uid]-=bet
+    try:
+        bet = int(message.text)
+    except:
+        msg = bot.send_message(chat_id,"Введите число:")
+        bot.register_next_step_handler(msg,set_bet,chat_id,uid,name)
+        return
+
+    balances.setdefault(uid,START_BALANCE)
+
+    if bet > balances[uid]:
+        msg = bot.send_message(chat_id,"🛑 Недостаточно средств, чтобы поставить такую ставку")
+        bot.register_next_step_handler(msg,set_bet,chat_id,uid,name)
+        return
+
+    if bet <= 0:
+        msg = bot.send_message(chat_id,"Введите корректную ставку:")
+        bot.register_next_step_handler(msg,set_bet,chat_id,uid,name)
+        return
+
+    balances[uid] -= bet
+
     game["players"].append({
-        "id":uid,
-        "name":name,
-        "hand":[],
-        "bet":bet,
-        "stand":False,
-        "cashout":False
+        "id": uid,
+        "name": name,
+        "hand": [],
+        "bet": bet,
+        "stand": False,
+        "cashout": False
     })
 
-    bot.send_message(message.chat.id,f"{name} сел за стол со ставкой {bet}")
-    bot.send_message(message.chat.id,
+    bot.send_message(chat_id,f"{name} сел за стол со ставкой {bet}")
+    bot.send_message(chat_id,
                      "Ожидание ставок других участников.\n"
                      "Если никто не присоединится, игра начнется через 2 минуты.")
 
-    if len(game["players"])==MAX_PLAYERS:
-        bot.send_message(message.chat.id,
-                         "Игра скоро начнется… Дилер раздает карты")
+    if len(game["players"]) == MAX_PLAYERS:
+        bot.send_message(chat_id,"Игра скоро начнется… Дилер раздает карты")
         time.sleep(10)
-        start_game(message.chat.id)
+        start_game(chat_id)
 
-# ================= ТАЙМЕР =================
+# ================= ТАЙМЕР ОЖИДАНИЯ =================
 
 def wait_start(chat_id):
     time.sleep(WAIT_TIME)
-    game=games.get(chat_id)
-    if game and not game["started"] and len(game["players"])>0:
+    game = games.get(chat_id)
+    if game and not game["started"] and len(game["players"]) > 0:
         start_game(chat_id)
 
 # ================= СТАРТ =================
 
 def start_game(chat_id):
-    game=games[chat_id]
-    game["started"]=True
+    game = games.get(chat_id)
+    if not game:
+        return
 
-    deck=game["deck"]
+    game["started"] = True
+
     for p in game["players"]:
-        p["hand"]=[deck.pop(),deck.pop()]
+        p["hand"] = [game["deck"].pop(), game["deck"].pop()]
 
-    game["dealer"]={"hand":[deck.pop(),deck.pop()]}
+    game["dealer"] = {"hand":[game["deck"].pop(),game["deck"].pop()]}
 
-    bot.send_message(chat_id,
-                     f"Дилер: {format_hand([game['dealer']['hand'][0]])} ❓")
-
+    bot.send_message(chat_id,f"Дилер: {game['dealer']['hand'][0]} ❓")
     next_turn(chat_id)
+    threading.Thread(target=action_timeout,args=(chat_id,)).start()
 
 # ================= ХОДЫ =================
 
 def next_turn(chat_id):
-    game=games.get(chat_id)
+    game = games.get(chat_id)
     if not game:
         return
-    players=game["players"]
 
-    while game["turn"]<len(players):
-        p=players[game["turn"]]
-        if not p["stand"] and not p["cashout"]:
-            score=calculate_score(p["hand"])
-            bot.send_message(chat_id,
-                             f"Ход {p['name']}\n"
-                             f"{format_hand(p['hand'])} ({score})",
-                             reply_markup=player_keyboard())
-            return
-        game["turn"]+=1
+    players = game["players"]
 
-    finish_game(chat_id)
+    if game["turn"] >= len(players):
+        finish_game(chat_id)
+        return
+
+    player = players[game["turn"]]
+
+    if player["stand"] or player["cashout"]:
+        game["turn"] += 1
+        next_turn(chat_id)
+        return
+
+    score = calculate_score(player["hand"])
+    bot.send_message(chat_id,
+                     f"Ход {player['name']} ({score})",
+                     reply_markup=player_keyboard())
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower() in ["доб","стоп","кэш"])
-def actions(m):
-    chat_id=m.chat.id
-    uid=m.from_user.id
-    game=games.get(chat_id)
+def action(m):
+    chat_id = m.chat.id
+    uid = m.from_user.id
+    game = games.get(chat_id)
+
     if not game or not game["started"]:
         return
 
-    player=game["players"][game["turn"]]
-    if player["id"]!=uid:
+    if game["turn"] >= len(game["players"]):
         return
+
+    player = game["players"][game["turn"]]
+
+    if player["id"] != uid:
+        return
+
+    game["last_action"] = time.time()
 
     if m.text.lower()=="доб":
         player["hand"].append(game["deck"].pop())
@@ -253,42 +251,57 @@ def actions(m):
     game["turn"]+=1
     next_turn(chat_id)
 
+# ================= АВТО ОТМЕНА =================
+
+def action_timeout(chat_id):
+    while chat_id in games:
+        time.sleep(5)
+        game = games.get(chat_id)
+        if not game or not game["started"]:
+            return
+        if time.time()-game["last_action"] > ACTION_TIMEOUT:
+            for p in game["players"]:
+                balances[p["id"]] += p["bet"]
+            bot.send_message(chat_id,"⛔ Игра отменена из-за бездействия. Ставки возвращены.")
+            del games[chat_id]
+            return
+
 # ================= ФИНИШ =================
 
 def finish_game(chat_id):
-    game=games[chat_id]
-    dealer=game["dealer"]
-    deck=game["deck"]
+    game = games.get(chat_id)
+    if not game:
+        return
 
-    while calculate_score(dealer["hand"])<17:
-        dealer["hand"].append(deck.pop())
+    dealer = game["dealer"]
 
-    dealer_score=calculate_score(dealer["hand"])
-    text=f"Дилер: {format_hand(dealer['hand'])} ({dealer_score})\n\n"
+    while calculate_score(dealer["hand"]) < 17:
+        dealer["hand"].append(game["deck"].pop())
+
+    dealer_score = calculate_score(dealer["hand"])
+    text = f"Дилер: {dealer['hand']} ({dealer_score})\n\n"
 
     for p in game["players"]:
-        score=calculate_score(p["hand"])
-        text+=f"{p['name']}: {format_hand(p['hand'])} ({score})\n"
+        score = calculate_score(p["hand"])
+        text += f"{p['name']}: {score}\n"
 
         if p["cashout"]:
             continue
 
-        if dealer_score>21 and score<=21:
-            balances[p["id"]]+=p["bet"]*2
-        elif dealer_score==21:
-            if score==21:
-                balances[p["id"]]+=p["bet"]
+        if dealer_score > 21 and score <= 21:
+            balances[p["id"]] += p["bet"]*2
+        elif dealer_score == 21:
+            if score == 21:
+                balances[p["id"]] += p["bet"]
         else:
-            if score<=21 and score>dealer_score:
-                balances[p["id"]]+=p["bet"]*2
-            elif score==dealer_score:
-                balances[p["id"]]+=p["bet"]
+            if score <= 21 and score > dealer_score:
+                balances[p["id"]] += p["bet"]*2
+            elif score == dealer_score:
+                balances[p["id"]] += p["bet"]
 
-        cooldowns[p["id"]]=time.time()+COOLDOWN_TIME
+        cooldowns[p["id"]] = time.time()+COOLDOWN_TIME
 
     bot.send_message(chat_id,text)
     del games[chat_id]
-
-# ================= ЗАПУСК =================
 
 bot.infinity_polling()
