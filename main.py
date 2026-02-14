@@ -582,27 +582,21 @@ CREATE TABLE IF NOT EXISTS clan_members (
 conn.commit()
 
 # ---------------- Создать клан ----------------
-@bot.message_handler(func=lambda m: m.text.lower().startswith("бклан создать "))
+@bot.message_handler(func=lambda m: m.text.lower().startswith("бклан создать"))
 def create_clan(message):
-    clan_name = message.text[13:].strip()
-    if not clan_name:
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
         bot.send_message(message.chat.id, "❗ Используй: бклан создать <название клана>")
         return
-
+    clan_name = parts[2].strip()
     user_id = message.from_user.id
+    username = message.from_user.username
 
     cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
     if cursor.fetchone():
         bot.send_message(message.chat.id, f"❌ Клан <b>{clan_name}</b> уже существует!", parse_mode="HTML")
         return
 
-    # Проверяем, не состоит ли пользователь уже в другом клане
-    cursor.execute("SELECT clan_id FROM clan_members WHERE user_id=?", (user_id,))
-    if cursor.fetchone():
-        bot.send_message(message.chat.id, "⚠ Вы уже состоите в клане. Сначала выйдите командой бвыйти.")
-        return
-
-    # Создаём клан и добавляем создателя
     cursor.execute("INSERT INTO clans (name) VALUES (?)", (clan_name,))
     clan_id = cursor.lastrowid
     cursor.execute("INSERT INTO clan_members (user_id, clan_id) VALUES (?, ?)", (user_id, clan_id))
@@ -610,44 +604,16 @@ def create_clan(message):
 
     bot.send_message(message.chat.id, f"🏰 Клан <b>{clan_name}</b> создан! Ты автоматически вошёл в него.", parse_mode="HTML")
 
-# ---------------- Удалить клан ----------------
-@bot.message_handler(func=lambda m: m.text.lower().startswith("бклан удалить "))
-def delete_clan(message):
-    clan_name = message.text[13:].strip()
-    if not clan_name:
-        bot.send_message(message.chat.id, "❗ Используй: бклан удалить <название клана>")
-        return
-
-    user_id = message.from_user.id
-    cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
-    row = cursor.fetchone()
-    if not row:
-        bot.send_message(message.chat.id, f"❌ Клан <b>{clan_name}</b> не найден!", parse_mode="HTML")
-        return
-    clan_id = row[0]
-
-    # Проверяем, является ли пользователь участником клана (только участник может удалить)
-    cursor.execute("SELECT user_id FROM clan_members WHERE user_id=? AND clan_id=?", (user_id, clan_id))
-    if not cursor.fetchone():
-        bot.send_message(message.chat.id, "⚠ Ты должен состоять в клане, чтобы удалить его.")
-        return
-
-    # Удаляем всех участников и сам клан
-    cursor.execute("DELETE FROM clan_members WHERE clan_id=?", (clan_id,))
-    cursor.execute("DELETE FROM clans WHERE clan_id=?", (clan_id,))
-    conn.commit()
-
-    bot.send_message(message.chat.id, f"🗑️ Клан <b>{clan_name}</b> удалён!", parse_mode="HTML")
-
 # ---------------- Вступить в клан ----------------
-@bot.message_handler(func=lambda m: m.text.lower().startswith("бвступить "))
+@bot.message_handler(func=lambda m: m.text.lower().startswith("бвступить"))
 def join_clan(message):
-    clan_name = message.text[9:].strip()
-    if not clan_name:
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
         bot.send_message(message.chat.id, "❗ Используй: бвступить <название клана>")
         return
-
+    clan_name = parts[1].strip()
     user_id = message.from_user.id
+
     cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
     row = cursor.fetchone()
     if not row:
@@ -657,29 +623,56 @@ def join_clan(message):
 
     cursor.execute("SELECT clan_id FROM clan_members WHERE user_id=?", (user_id,))
     if cursor.fetchone():
-        bot.send_message(message.chat.id, "⚠ Вы уже состоите в клане. Сначала выйдите командой бвыйти.")
+        bot.send_message(message.chat.id, "⚠ Ты уже состоишь в клане. Сначала выйди командой бвыйти.")
         return
 
     cursor.execute("INSERT INTO clan_members (user_id, clan_id) VALUES (?, ?)", (user_id, clan_id))
     conn.commit()
-    bot.send_message(message.chat.id, f"✅ Вы вступили в клан <b>{clan_name}</b>!", parse_mode="HTML")
+    bot.send_message(message.chat.id, f"✅ Ты вступил в клан <b>{clan_name}</b>!", parse_mode="HTML")
 
 # ---------------- Выйти из клана ----------------
 @bot.message_handler(func=lambda m: m.text.lower() == "бвыйти")
 def leave_clan(message):
     user_id = message.from_user.id
-    cursor.execute("SELECT c.name FROM clan_members cm JOIN clans c ON cm.clan_id=c.clan_id WHERE cm.user_id=?", (user_id,))
+    cursor.execute("""
+        SELECT c.name 
+        FROM clan_members cm 
+        JOIN clans c ON cm.clan_id=c.clan_id 
+        WHERE cm.user_id=?
+    """, (user_id,))
     row = cursor.fetchone()
     if not row:
-        bot.send_message(message.chat.id, "⚠ Вы не состоите в клане.")
+        bot.send_message(message.chat.id, "⚠ Ты не состоишь в клане.")
         return
     clan_name = row[0]
-
     cursor.execute("DELETE FROM clan_members WHERE user_id=?", (user_id,))
     conn.commit()
-    bot.send_message(message.chat.id, f"🏹 Вы вышли из клана <b>{clan_name}</b>.", parse_mode="HTML")
+    bot.send_message(message.chat.id, f"🏹 Ты вышел из клана <b>{clan_name}</b>.", parse_mode="HTML")
 
-# ---------------- Список кланов ----------------
+# ---------------- Удалить клан ----------------
+@bot.message_handler(func=lambda m: m.text.lower().startswith("бклан удалить"))
+def delete_clan(message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "❗ Используй: бклан удалить <название клана>")
+        return
+    clan_name = parts[2].strip()
+
+    cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
+    row = cursor.fetchone()
+    if not row:
+        bot.send_message(message.chat.id, f"❌ Клан <b>{clan_name}</b> не найден!", parse_mode="HTML")
+        return
+    clan_id = row[0]
+
+    # Удаляем всех участников и сам клан
+    cursor.execute("DELETE FROM clan_members WHERE clan_id=?", (clan_id,))
+    cursor.execute("DELETE FROM clans WHERE clan_id=?", (clan_id,))
+    conn.commit()
+
+    bot.send_message(message.chat.id, f"⚠ Клан <b>{clan_name}</b> был удалён.", parse_mode="HTML")
+
+# ---------------- Список всех кланов ----------------
 @bot.message_handler(func=lambda m: m.text.lower() == "кланы")
 def list_clans(message):
     cursor.execute("SELECT clan_id, name FROM clans")
@@ -691,9 +684,9 @@ def list_clans(message):
     text = "🏰 <b>Кланы</b>\n\n"
     for idx, (clan_id, name) in enumerate(clans, start=1):
         cursor.execute("""
-            SELECT COUNT(*), SUM(balance)
-            FROM clan_members cm
-            JOIN users u ON cm.user_id=u.user_id
+            SELECT COUNT(*), SUM(balance) 
+            FROM clan_members cm 
+            JOIN users u ON cm.user_id=u.user_id 
             WHERE cm.clan_id=?
         """, (clan_id,))
         row = cursor.fetchone()
@@ -706,10 +699,11 @@ def list_clans(message):
 # ---------------- Список участников конкретного клана ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("буклана "))
 def clan_members_list(message):
-    clan_name = message.text[8:].strip()
-    if not clan_name:
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
         bot.send_message(message.chat.id, "❗ Используй: буклана <название клана>")
         return
+    clan_name = parts[1].strip()
 
     cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
     row = cursor.fetchone()
@@ -730,7 +724,7 @@ def clan_members_list(message):
         return
 
     text = f"🏰 <b>Участники клана {clan_name}</b>\n\n"
-    for idx, (user_id, username, first_name, balance) in enumerate(members, start=1):
+    for idx, (uid, username, first_name, balance) in enumerate(members, start=1):
         if username:
             name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
         else:
@@ -739,17 +733,17 @@ def clan_members_list(message):
 
     bot.send_message(message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True)
 
-# ---------------- Команды для кланов (бкинфо) ----------------
+# ---------------- Справка по кланам ----------------
 @bot.message_handler(func=lambda m: m.text.lower() == "бкинфо")
 def clans_info(message):
     text = (
-        "🏰 <b>Команды для работы с кланами:</b>\n\n"
-        "🛡 <b>Создать клан:</b> бклан создать <название клана>\n"
-        "🛡 <b>Удалить клан:</b> бклан удалить <название клана>\n"
-        "⚔ <b>Вступить в клан:</b> бвступить <название клана>\n"
-        "🏹 <b>Выйти из клана:</b> бвыйти\n"
-        "📜 <b>Список кланов:</b> кланы\n"
-        "👥 <b>Список участников клана:</b> буклана <название клана>"
+        "🏰 <b>Команды работы с кланами:</b>\n\n"
+        "✅ Создать клан: бклан создать <название клана>\n"
+        "✅ Вступить в клан: бвступить <название клана>\n"
+        "✅ Выйти из клана: бвыйти\n"
+        "✅ Удалить клан: бклан удалить <название клана>\n"
+        "✅ Список кланов: кланы\n"
+        "✅ Список участников конкретного клана: буклана <название клана>"
     )
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 # ---------------- Запуск ----------------
