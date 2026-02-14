@@ -838,54 +838,136 @@ def mines_move(message):
                      f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.\n"
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
-# ---------------- Фарминг монет ----------------
-farming_cooldowns = {}  # словарь для хранения КД фарма
+# ---------------- Дуэли 1v1 ----------------
+from telebot import types
+import random
 
-@bot.message_handler(func=lambda m: "бфарм" in m.text.lower())
-def farm_coins(message):
-    user_id = message.from_user.id
-    username = message.from_user.username or ""
-    first_name = message.from_user.first_name or "Игрок"
-    now = int(time.time())
+duels = {}  # Словарь активных дуэлей: chat_id -> duel_data
 
-    # Проверяем глобальный КД 10 секунд, чтобы не спамить
-    last_time, status_cd = farming_cooldowns.get(user_id, (0, "none"))
-    if now - last_time < 10:
-        bot.send_message(message.chat.id, "🕒 Подождите 10 сек. после отправки команды!")
+@bot.message_handler(func=lambda m: m.text.lower().startswith("бдуэль"))
+def start_duel(message):
+    parts = message.text.split()
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "❗ Используй: бдуэль @username ставка")
         return
 
-    # КД после успеха или неудачи
-    if status_cd == "success" and now - last_time < 3600:
-        remaining = 3600 - (now - last_time)
-        bot.send_message(message.chat.id, f"⏱ Фарм доступен через {remaining//60}м {remaining%60}с.")
-        return
-    elif status_cd == "fail" and now - last_time < 1800:
-        remaining = 1800 - (now - last_time)
-        bot.send_message(message.chat.id, f"⏱ Повторная попытка возможна через {remaining//60}м {remaining%60}с.")
+    opponent_username = parts[1].replace("@", "")
+    try:
+        bet = int(parts[2])
+    except:
+        bot.send_message(message.chat.id, "❗ Ставка должна быть числом!")
         return
 
-    # 70% шанс успеха
-    if random.randint(1, 100) <= 70:
-        amount = random.randint(50, 999)  # случайная сумма монет
-        balance = get_balance(user_id)
-        update_balance(user_id, balance + amount)
-        farming_cooldowns[user_id] = (now, "success")
-        bot.send_message(
-            message.chat.id,
-            f"✅ Фарминг удался!\n"
-            f"💰 <a href='https://t.me/{username}'>{first_name}</a> **Ваш баланс обновлен:** {balance + amount} монет\n"
-            f"⏱ Повторить фарм можно через 1 час.",
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
-    else:
-        farming_cooldowns[user_id] = (now, "fail")
-        bot.send_message(
-            message.chat.id,
-            f"❌ Фарминг не удался!\n"
-            f"<a href='https://t.me/{username}'>{first_name}</a> **повторите попытку через 30 минут!**",
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
+    # Найдем id противника через username в базе
+    cursor.execute("SELECT user_id, balance, username, first_name FROM users WHERE username=?", (opponent_username,))
+    row = cursor.fetchone()
+    if not row:
+        bot.send_message(message.chat.id, f"❌ Игрок @{opponent_username} не найден!")
+        return
+
+    opponent_id, opponent_balance, opp_username, opp_first_name = row
+    player_id = message.from_user.id
+    player_balance = get_balance(player_id)
+
+    if player_id == opponent_id:
+        bot.send_message(message.chat.id, "❌ Нельзя вызвать самого себя!")
+        return
+    if player_balance < bet:
+        bot.send_message(message.chat.id, "❌ У тебя недостаточно монет для ставки!")
+        return
+    if opponent_balance < bet:
+        bot.send_message(message.chat.id, f"❌ У @{opponent_username} недостаточно монет для ставки!")
+        return
+
+    # Проверяем, есть ли уже дуэль в этом чате
+    if message.chat.id in duels:
+        bot.send_message(message.chat.id, "⚠ В этом чате уже идет дуэль!")
+        return
+
+    # Снимаем ставку с обоих
+    update_balance(player_id, player_balance - bet)
+    update_balance(opponent_id, opponent_balance - bet)
+
+    # Создаем дуэль
+    duels[message.chat.id] = {
+        "players": {
+            player_id: {"username": message.from_user.username, "first_name": message.from_user.first_name, "alive": True},
+            opponent_id: {"username": opp_username, "first_name": opp_first_name, "alive": True}
+        },
+        "turn": player_id,
+        "bet": bet
+    }
+
+    send_duel_status(message.chat.id)
+
+def send_duel_status(chat_id):
+    duel = duels[chat_id]
+    turn_id = duel["turn"]
+    turn_name = duel["players"][turn_id]["first_name"]
+    text = f"⚔ Дуэль началась!\n"
+    for uid, p in duel["players"].items():
+        text += f"<a href='https://t.me/{p['username']}'>{p['first_name']}</a> 💰 Ставка: {duel['bet']}\n"
+    text += f"\nХод игрока: <a href='https://t.me/{duel['players'][turn_id]['username']}'>{turn_name}</a>"
+
+    # Создаем инлайн кнопки
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🛡️ Защититься", callback_data=f"shield_{turn_id}"),
+        types.InlineKeyboardButton("🔫 Выстрел", callback_data=f"shoot_{turn_id}")
+    )
+
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_duel(call):
+    chat_id = call.message.chat.id
+    if chat_id not in duels:
+        bot.answer_callback_query(call.id, "⚠ Нет активной дуэли.")
+        return
+
+    duel = duels[chat_id]
+    turn_id = duel["turn"]
+    if not call.data.endswith(str(turn_id)):
+        bot.answer_callback_query(call.id, "⚠ Сейчас не твой ход!")
+        return
+
+    player_id = turn_id
+    action = call.data.split("_")[0]  # shield или shoot
+    # Определяем противника
+    opponent_id = [uid for uid in duel["players"] if uid != player_id][0]
+    opponent = duel["players"][opponent_id]
+
+    # Проверяем результат выстрела
+    result_text = ""
+    if action == "shoot":
+        # 50% по незащищенному, 35% если защищен
+        target_action = duel.get("last_action", {}).get(opponent_id)
+        chance = 35 if target_action == "shield" else 50
+        if random.randint(1,100) <= chance:
+            # победитель
+            winner_id = player_id
+            loser_id = opponent_id
+            winner = duel["players"][winner_id]
+            loser = duel["players"][loser_id]
+            bet_total = duel["bet"]*2
+            update_balance(winner_id, get_balance(winner_id)+bet_total)
+            result_text = f"🎉 Победитель: <a href='https://t.me/{winner['username']}'>{winner['first_name']}</a>\n💰 Выигрыш: {bet_total} монет"
+            del duels[chat_id]
+            bot.edit_message_text(result_text, chat_id, call.message.message_id, parse_mode="HTML")
+            return
+        else:
+            result_text = f"❗ Выстрел промахнулся!"
+    elif action == "shield":
+        result_text = f"🛡️ Игрок <a href='https://t.me/{duel['players'][player_id]['username']}'>{duel['players'][player_id]['first_name']}</a> защитился!"
+
+    # Сохраняем действие для защиты
+    duel["last_action"] = duel.get("last_action", {})
+    duel["last_action"][player_id] = action
+
+    # Меняем очередь
+    duel["turn"] = opponent_id
+    # Обновляем сообщение
+    send_duel_status(chat_id)
+    bot.answer_callback_query(call.id, "Ход принят!")
 # ---------------- Запуск ----------------
 bot.infinity_polling()
