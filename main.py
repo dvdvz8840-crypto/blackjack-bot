@@ -4,21 +4,31 @@ import random
 import sqlite3
 import time
 
-TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"
+TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"  # <-- вставь сюда свой токен
 ADMIN_ID = 6151671553
+
 bot = telebot.TeleBot(TOKEN)
 
 # ---------------- База данных ----------------
 conn = sqlite3.connect("blackjack.db", check_same_thread=False)
 cursor = conn.cursor()
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     balance INTEGER DEFAULT 1000
 )
 """)
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS daily_rewards (
+    user_id INTEGER PRIMARY KEY,
+    last_claim INTEGER DEFAULT 0
+)
+""")
 conn.commit()
 
+# ---------------- Баланс ----------------
 def get_balance(user_id):
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
@@ -63,11 +73,53 @@ def game_keyboard(can_double=False):
         )
     return markup
 
+# ---------------- Главные кнопки ----------------
+def main_menu_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("бал", "бкоманды")
+    markup.row("блек 100", "деньги")  # кнопка для ежедневной награды
+    return markup
+
+# ---------------- Ежедневная награда ----------------
+def can_claim_daily(user_id):
+    cursor.execute("SELECT last_claim FROM daily_rewards WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    now = int(time.time())
+    if row is None:
+        cursor.execute("INSERT INTO daily_rewards (user_id, last_claim) VALUES (?, ?)", (user_id, 0))
+        conn.commit()
+        return True, 0
+    last = row[0]
+    if now - last >= 86400:  # 24 часа
+        return True, last
+    return False, last
+
+def claim_daily(user_id, amount=500):
+    can_claim, last = can_claim_daily(user_id)
+    now = int(time.time())
+    if can_claim:
+        balance = get_balance(user_id)
+        update_balance(user_id, balance + amount)
+        cursor.execute("UPDATE daily_rewards SET last_claim=? WHERE user_id=?", (now, user_id))
+        conn.commit()
+        return True, amount
+    else:
+        remaining = 86400 - (now - last)
+        hours = remaining // 3600
+        minutes = (remaining % 3600) // 60
+        seconds = remaining % 60
+        return False, f"{hours}ч {minutes}м {seconds}с"
+
 # ---------------- Команды ----------------
 @bot.message_handler(commands=["start"])
 def start(message):
     get_balance(message.from_user.id)
-    bot.send_message(message.chat.id, "🎰 <b>Добро пожаловать в BlackJack!</b>\n\nНапиши <b>бкоманды</b> чтобы увидеть список команд.", parse_mode="HTML")
+    bot.send_message(message.chat.id,
+                     "🎰 Добро пожаловать в BlackJack!\n\n"
+                     "Используй кнопки или пиши команды.\n"
+                     "Нажми <b>бкоманды</b> чтобы увидеть все команды.",
+                     parse_mode="HTML",
+                     reply_markup=main_menu_keyboard())
 
 @bot.message_handler(func=lambda m: m.text.lower() == "бкоманды")
 def commands(message):
@@ -78,17 +130,26 @@ def commands(message):
         return
     cooldowns[user_id] = now
     bot.send_message(message.chat.id,
-        "📜 <b>Команды BlackJack:</b>\n\n"
-        "💰 <b>бал</b> — проверить баланс\n"
-        "🎰 <b>блек сумма</b> — начать игру\n"
-        "💸 <b>перевод ID сумма</b> — перевести монеты\n"
-        "📜 <b>бкоманды</b> — список команд", parse_mode="HTML"
-    )
+                     "📜 <b>Команды BlackJack:</b>\n\n"
+                     "💰 <b>бал</b> — проверить баланс\n"
+                     "🎰 <b>блек сумма</b> — начать игру\n"
+                     "💸 <b>перевод ID сумма</b> — перевести монеты\n"
+                     "🎁 <b>деньги</b> — ежедневная награда\n"
+                     "📜 <b>бкоманды</b> — список команд", parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text.lower() == "бал")
 def balance_cmd(message):
     bal = get_balance(message.from_user.id)
     bot.send_message(message.chat.id, f"💰 <b>Твой баланс:</b> {bal} монет", parse_mode="HTML")
+
+@bot.message_handler(func=lambda m: m.text.lower() == "деньги")
+def daily_reward(message):
+    user_id = message.from_user.id
+    success, result = claim_daily(user_id)
+    if success:
+        bot.send_message(message.chat.id, f"🎁 Ты получил ежедневную награду: {result} монет!")
+    else:
+        bot.send_message(message.chat.id, f"⏳ Ежедневная награда уже получена.\nДоступно через: {result}")
 
 @bot.message_handler(func=lambda m: m.text.lower().startswith("блек"))
 def blackjack(message):
@@ -135,11 +196,12 @@ def game_actions(callback):
         if hand_value(player) > 21:
             del games[user_id]
             bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                text=f"💥 <b>Перебор!</b>\n\nТвои карты: {player} ({hand_value(player)})\n\nТы проиграл {bet} монет.", parse_mode="HTML")
+                                  text=f"💥 <b>Перебор!</b>\n\nТвои карты: {player} ({hand_value(player)})\n\nТы проиграл {bet} монет.",
+                                  parse_mode="HTML")
             return
         bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-            text=f"🃏 Твои карты: {player} ({hand_value(player)})\n🎴 Карта дилера: {dealer[0]} + ❓",
-            reply_markup=game_keyboard(), parse_mode="HTML")
+                              text=f"🃏 Твои карты: {player} ({hand_value(player)})\n🎴 Карта дилера: {dealer[0]} + ❓",
+                              reply_markup=game_keyboard(), parse_mode="HTML")
 
     elif callback.data == "stand":
         while hand_value(dealer) < 17:
@@ -158,7 +220,7 @@ def game_actions(callback):
             text = f"😢 Ты проиграл {bet} монет."
         del games[user_id]
         bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-            text=f"{text}\n\n🃏 {player} ({player_val})\n🎴 {dealer} ({dealer_val})", parse_mode="HTML")
+                              text=f"{text}\n\n🃏 {player} ({player_val})\n🎴 {dealer} ({dealer_val})", parse_mode="HTML")
 
     elif callback.data == "cash":
         balance = get_balance(user_id)
@@ -166,7 +228,7 @@ def game_actions(callback):
         update_balance(user_id, balance + refund)
         del games[user_id]
         bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-            text=f"💰 Ты сделал кэшаут!\nВозвращено {refund} монет.", parse_mode="HTML")
+                              text=f"💰 Ты сделал кэшаут!\nВозвращено {refund} монет.", parse_mode="HTML")
 
     elif callback.data == "double":
         balance = get_balance(user_id)
@@ -180,7 +242,7 @@ def game_actions(callback):
         if hand_value(player) > 21:
             del games[user_id]
             bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                text=f"💥 Перебор после дабла!\nТы проиграл {game['bet']} монет.", parse_mode="HTML")
+                                  text=f"💥 Перебор после дабла!\nТы проиграл {game['bet']} монет.", parse_mode="HTML")
             return
         callback.data = "stand"
         game_actions(callback)
@@ -205,10 +267,10 @@ def transfer(message):
     update_balance(target_id, target_balance + amount)
     bot.send_message(message.chat.id, f"💸 Переведено {amount} монет игроку {target_id}")
 
-# ---------------- Админ выдача ----------------
+# ---------------- Админская выдача ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("админвыдать"))
 def admin_give(message):
-    if message.from_user.id != ADMIN_ID: 
+    if message.from_user.id != ADMIN_ID:
         return
     parts = message.text.split()
     if len(parts) != 3:
