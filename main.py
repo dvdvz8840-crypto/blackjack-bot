@@ -838,14 +838,21 @@ def mines_move(message):
                      f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.\n"
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
-# ------------------- Дуэль 1v1 -------------------
+# ------------------- Дуэль 1v1 с инлайн-кнопками -------------------
 duels = {}  # chat_id -> duel
 
-@bot.message_handler(func=lambda m: m.text and "бдуэль" in m.text.lower())
-def start_duel(message):
+
+def duel_safe_update_balance(user_id, amount):
+    """Обновление баланса игрока (используем вашу функцию из main.py)."""
+    current = get_balance(user_id)
+    update_balance(user_id, current + amount)
+
+
+@bot.message_handler(commands=['бдуэль'])
+def start_duel_command(message):
     parts = message.text.strip().split()
     if len(parts) < 3:
-        bot.send_message(message.chat.id, "❗ Используй: бдуэль @username ставка")
+        bot.send_message(message.chat.id, "❗ Используй: /бдуэль @username ставка")
         return
 
     target_username = parts[1].lstrip("@").lower()
@@ -890,12 +897,11 @@ def start_duel(message):
     # Создаем дуэль
     duels[message.chat.id] = {
         "players": {
-            player_id: {"username": player_username, "first_name": player_name},
-            opp_id: {"username": opp_username, "first_name": opp_name}
+            player_id: {"username": player_username, "first_name": player_name, "action": None},
+            opp_id: {"username": opp_username, "first_name": opp_name, "action": None}
         },
         "turn": player_id,
-        "bet": bet,
-        "actions": {}
+        "bet": bet
     }
 
     send_duel_status(message.chat.id)
@@ -905,7 +911,7 @@ def send_duel_status(chat_id):
     duel = duels[chat_id]
     turn_id = duel["turn"]
 
-    text = "⚔ Дуэль началась!\n"
+    text = "⚔ <b>Дуэль началась!</b>\n"
     for uid, p in duel["players"].items():
         text += f"<a href='https://t.me/{p['username']}'>{p['first_name']}</a> 💰 Ставка: {duel['bet']}\n"
 
@@ -936,20 +942,24 @@ def duel_action(call):
     action_type = call.data.split("_")[0]
     opponent_id = [uid for uid in duel["players"] if uid != turn_id][0]
 
-    prev_action = duel.get("actions", {}).get(opponent_id)
-    hit_chance = 35 if prev_action == "shield" else 50
+    opponent_prev = duel["players"][opponent_id]["action"]
+    hit_chance = 35 if opponent_prev == "shield" else 50
 
     if action_type == "shoot":
         if random.randint(1, 100) <= hit_chance:
+            # Победа стрелявшего
             winner_id = turn_id
             loser_id = opponent_id
             total = duel["bet"] * 2
-            update_balance(winner_id, get_balance(winner_id) + total)
+            duel_safe_update_balance(winner_id, total)
 
             winner = duel["players"][winner_id]
-            msg = (f"🎉 Победитель: <a href='https://t.me/{winner['username']}'>{winner['first_name']}</a>\n"
-                   f"💰 Выигрыш: {total} монет")
-            bot.edit_message_text(msg, chat_id, call.message.message_id, parse_mode="HTML")
+            bot.edit_message_text(
+                f"🎉 Победитель: <a href='https://t.me/{winner['username']}'>{winner['first_name']}</a>\n"
+                f"💰 Выигрыш: {total} монет",
+                chat_id, call.message.message_id,
+                parse_mode="HTML"
+            )
             del duels[chat_id]
             return
         else:
@@ -957,7 +967,7 @@ def duel_action(call):
     elif action_type == "shield":
         bot.answer_callback_query(call.id, "🛡️ Вы защищены!")
 
-    duel.setdefault("actions", {})[turn_id] = action_type
+    duel["players"][turn_id]["action"] = action_type
     duel["turn"] = opponent_id
     send_duel_status(chat_id)
     
