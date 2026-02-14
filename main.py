@@ -707,28 +707,28 @@ def clans_info(message):
     )
     bot.send_message(message.chat.id, text, parse_mode="HTML")
     
-    # ---------------- Мины ----------------
+# ---------------- Мины с инлайн-кнопками ----------------
 import threading
 
 mines_games = {}
 
 multipliers = {
-    3: [1.07, 1.23, 1.41, 1.64, 1.91, 2.24, 2.62, 3.04, 3.53, 4.09, 
-        4.73, 5.46, 6.31, 7.28, 8.40, 9.67, 11.12, 12.77, 14.66, 16.83, 19.33, 22.21][:22],
-    5: [1.18, 1.50, 1.91, 2.48, 3.25, 4.26, 5.59, 7.33, 9.60, 12.57, 
-        16.45, 21.50, 28.08, 36.67, 47.92, 62.64, 81.87, 107.00, 139.79, 182.55][:20],
-    10: [1.58, 2.71, 4.80, 8.80, 16.80, 32.10, 61.32, 117.20, 224.0, 428.0,
-         816.0, 1556.0, 2968.0, 5650.0, 10753.0][:15],
-    24: [23.75]  # только 1 шаг, шанс пройти 5%
+    3: [1.07,1.23,1.41,1.64,1.91, 2.24,2.62,3.04,3.53,4.09,
+        4.73,5.46,6.31,7.28,8.40,9.67,11.12,12.77,14.66,16.83,19.33,22.21][:22],
+    5: [1.18,1.50,1.91,2.48,3.25,4.26,5.59,7.33,9.60,12.57,
+        16.45,21.50,28.08,36.67,47.92,62.64,81.87,107.00,139.79,182.55][:20],
+    10: [1.58,2.71,4.80,8.80,16.80,32.10,61.32,117.20,224.0,428.0,
+         816.0,1556.0,2968.0,5650.0,10753.0][:15],
+    24: [23.75]  # шанс 5%
 }
 
-# ---------------- Создать игру Мины ----------------
-@bot.message_handler(func=lambda m: m.text.lower().startswith("мины"))
+# ---------------- Команда бмины ----------------
+@bot.message_handler(func=lambda m: m.text.lower().startswith("бмины"))
 def start_mines(message):
     ensure_username(message)
     parts = message.text.split()
     if len(parts) < 2 or not parts[1].isdigit():
-        bot.send_message(message.chat.id, "❗ Используй: мины <сумма ставки>")
+        bot.send_message(message.chat.id, "❗ Используй: бмины <сумма ставки>")
         return
     bet = int(parts[1])
     if bet < 100:
@@ -746,7 +746,7 @@ def start_mines(message):
         'mines': 0,
         'step': 0,
         'current_win': 0,
-        'field': [[0]*5 for _ in range(5)],
+        'field_buttons': [],  # поле 5x5
         'finished': False
     }
 
@@ -754,7 +754,7 @@ def start_mines(message):
     markup.row("3 мины", "5 мин", "10 мин", "24 мины")
     bot.send_message(message.chat.id, f"✅ Ставка принята: {bet} монет.\nВыберите количество мин на поле 5×5 (максимум 24):", reply_markup=markup)
 
-# ---------------- Выбор мин ----------------
+# ---------------- Выбор мин и создание инлайн-поля ----------------
 @bot.message_handler(func=lambda m: m.text.lower() in ["3 мины","5 мин","10 мин","24 мины"])
 def select_mines(message):
     user_id = message.from_user.id
@@ -764,50 +764,67 @@ def select_mines(message):
     game = mines_games[user_id]
     game['mines'] = mines
 
-    bot.send_message(message.chat.id, f"🎮 Поле готово! {mines} мин.\nДля хода выбирайте клетку: 1–25 (число в поле 5×5) или напишите '💰 Забрать' чтобы забрать текущий выигрыш.")
+    # Создаем инлайн-кнопки 5x5
+    markup = types.InlineKeyboardMarkup(row_width=5)
+    buttons = []
+    for i in range(1, 26):
+        btn = types.InlineKeyboardButton("⬜", callback_data=f"mine_{i}")
+        buttons.append(btn)
+    markup.add(*buttons)
+    game['field_buttons'] = buttons
 
-# ---------------- Обработка хода ----------------
-@bot.message_handler(func=lambda m: True)
-def mines_play(message):
-    user_id = message.from_user.id
+    bot.send_message(message.chat.id, f"🎮 Поле готово! {mines} мин.\nВыбирайте клетку или жмите 💰 Забрать чтобы забрать текущий выигрыш.", reply_markup=markup)
+
+# ---------------- Действия игрока по клику ----------------
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mine_"))
+def mines_step(callback):
+    user_id = callback.from_user.id
     if user_id not in mines_games:
+        callback.answer("Игра не найдена.", show_alert=True)
         return
     game = mines_games[user_id]
     if game['finished']:
+        callback.answer("Игра завершена.", show_alert=True)
         return
 
-    text = message.text.lower()
-    if text in ["💰 забрать", "забрать", "cash"]:
-        win = int(game['current_win'])
-        update_balance(user_id, get_balance(user_id)+win)
-        bot.send_message(message.chat.id, f"💰 Ты забрал {win} монет!")
-        del mines_games[user_id]
-        return
-
-    if not text.isdigit() or not (1 <= int(text) <= 25):
-        return
-    step = game['step']
     mines_count = game['mines']
+    step = game['step']
     bet = game['bet']
 
     # Проверка мины
     if mines_count == 24:
         safe = random.random() < 0.05  # 5% шанс пройти
     else:
-        # обычная вероятность
-        safe = random.random() > (mines_count/25)
+        safe = random.random() > (mines_count / 25)
 
     if not safe:
-        bot.send_message(message.chat.id, f"💥 Мина! Ты проиграл {bet} монет на шаге {step+1}.")
+        game['finished'] = True
+        # обновляем поле кнопок, показываем мину
+        for btn in game['field_buttons']:
+            btn.text = "💣"
+            btn.callback_data = "done"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(*game['field_buttons'])
+        bot.edit_message_reply_markup(callback.message.chat.id, callback.message.message_id, reply_markup=markup)
+        bot.send_message(callback.message.chat.id, f"💥 Мина! Вы проиграли {bet} монет на шаге {step+1}.")
         del mines_games[user_id]
         return
 
-    # Вычисляем выигрыш
+    # Выигрыш
     mults = multipliers[mines_count]
     current_mult = mults[step] if step < len(mults) else mults[-1]
     game['current_win'] = int(bet * current_mult)
-    game['step'] +=1
+    game['step'] += 1
 
-    bot.send_message(message.chat.id, f"✅ Шаг {game['step']} пройден!\nТекущий выигрыш: {game['current_win']} монет.\nВыберите следующую клетку или '💰 Забрать'.")
+    # Обновляем поле кнопки на выбранной клетке
+    idx = int(callback.data.split("_")[1]) - 1
+    game['field_buttons'][idx].text = "✅"
+    game['field_buttons'][idx].callback_data = "done"
+
+    markup = types.InlineKeyboardMarkup(row_width=5)
+    markup.add(*game['field_buttons'])
+    bot.edit_message_reply_markup(callback.message.chat.id, callback.message.message_id, reply_markup=markup)
+
+    callback.answer(f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.")
 # ---------------- Запуск ----------------
 bot.infinity_polling()
