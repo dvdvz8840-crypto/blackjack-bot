@@ -1,169 +1,200 @@
-import asyncio
+import os
+import telebot
 import random
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils import executor
+import threading
+import time
 
-API_TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"
+API_TOKEN = os.getenv("8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4")
+bot = telebot.TeleBot(API_TOKEN)
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-
-# Игроки и баланс
+# Балансы игроков
 players_balance = {}
+
+# Активные игры по chat_id
 active_games = {}
 
-# Карты
+# Карты и значения
 cards = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
 card_values = {'2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8,
                '9':9, '10':10, 'J':10, 'Q':10, 'K':10, 'A':11}
 
-# Команда /блек
-@dp.message_handler(commands=['блек'])
-async def start_blackjack(message: types.Message):
-    if message.from_user.id not in players_balance:
-        players_balance[message.from_user.id] = 500
-    await message.answer(f"Привет! Ваш баланс: {players_balance[message.from_user.id]} монет.")
+# ===================== Команды =====================
 
-# Команда /баланс
-@dp.message_handler(commands=['баланс'])
-async def check_balance(message: types.Message):
+# /блек - приветствие и баланс
+@bot.message_handler(commands=['блек'])
+def start_blackjack(message):
+    user_id = message.from_user.id
+    if user_id not in players_balance:
+        players_balance[user_id] = 500
+    bot.send_message(message.chat.id, f"Привет, {message.from_user.first_name}! Ваш баланс: {players_balance[user_id]} монет.")
+
+# /баланс - проверка баланса
+@bot.message_handler(commands=['баланс'])
+def check_balance(message):
     balance = players_balance.get(message.from_user.id, 0)
-    await message.answer(f"Ваш баланс: {balance} монет.")
+    bot.send_message(message.chat.id, f"Ваш баланс: {balance} монет.")
 
-# Команда /игра
-@dp.message_handler(commands=['игра'])
-async def create_game(message: types.Message):
+# /игра - начать набор игроков
+@bot.message_handler(commands=['игра'])
+def create_game(message):
     chat_id = message.chat.id
     if chat_id in active_games:
-        await message.answer("Игра уже идет в этом чате!")
+        bot.send_message(chat_id, "Игра уже идет!")
         return
 
     active_games[chat_id] = {
         "players": {},
         "deck": cards * 4,
-        "started": False,
-        "bets_done": False
+        "started": False
     }
 
-    join_button = InlineKeyboardMarkup().add(
-        InlineKeyboardButton("Присоединиться к столу", callback_data="join_game")
-    )
+    bot.send_message(chat_id,
+        "Набор игроков начат! Максимум 3 игрока.\nЧтобы присоединиться, напишите 'присоединиться' в чат.\nСтавка обязательна.")
 
-    await message.answer("Набор игроков начат! Максимум 3 игрока.\nНажмите кнопку, чтобы присоединиться.", reply_markup=join_button)
+# ===================== Присоединение к игре =====================
+@bot.message_handler(func=lambda message: message.text.lower() == "присоединиться")
+def join_game(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name
 
-# Игрок нажал "Присоединиться"
-@dp.callback_query_handler(lambda c: c.data == "join_game")
-async def join_game(callback_query: types.CallbackQuery):
-    chat_id = callback_query.message.chat.id
-    user_id = callback_query.from_user.id
-    user_name = callback_query.from_user.first_name
-
-    game = active_games.get(chat_id)
-    if not game:
-        await callback_query.answer("Ошибка: игра не найдена.")
+    if chat_id not in active_games:
+        bot.send_message(chat_id, "Сначала начните игру командой /игра.")
         return
 
+    game = active_games[chat_id]
+
     if user_id in game["players"]:
-        await callback_query.answer("Вы уже присоединились!")
+        bot.send_message(chat_id, f"{user_name}, вы уже присоединились!")
         return
 
     if len(game["players"]) >= 3:
-        await callback_query.answer("Стол уже полон!")
+        bot.send_message(chat_id, "Стол уже полон!")
         return
 
-    await callback_query.answer()
-    await bot.send_message(chat_id, f"{user_name} присоединился! Введите ставку:")
+    # Запрос ставки
+    bot.send_message(chat_id, f"{user_name}, введите вашу ставку:")
 
-    # Ожидаем ставку
-    def check(msg: types.Message):
-        return msg.from_user.id == user_id and msg.chat.id == chat_id
-
-    try:
-        msg = await dp.bot.wait_for('message', timeout=180, check=check)
-        bet = int(msg.text)
-        if bet <= 0 or bet > players_balance.get(user_id, 0):
-            await msg.reply("Неверная ставка! Попробуйте снова командой /игра")
-            del game["players"][user_id]
+    # Ожидание ставки через обработчик сообщений
+    @bot.message_handler(func=lambda m: m.from_user.id == user_id and m.chat.id == chat_id)
+    def receive_bet(msg):
+        try:
+            bet = int(msg.text)
+            if bet <= 0 or bet > players_balance.get(user_id, 0):
+                bot.send_message(chat_id, f"{user_name}, неверная ставка. Попробуйте присоединиться заново.")
+                return
+        except ValueError:
+            bot.send_message(chat_id, f"{user_name}, ставка должна быть числом. Попробуйте присоединиться заново.")
             return
-        game["players"][user_id] = {"name": user_name, "bet": bet, "cards": [], "stand": False, "cashout": False}
+
+        # Ставка принята
         players_balance[user_id] -= bet
-        await msg.reply(f"Ставка принята: {bet} монет.")
-    except asyncio.TimeoutError:
-        await bot.send_message(chat_id, f"{user_name} не успел поставить ставку и не участвует.")
+        game["players"][user_id] = {
+            "name": user_name,
+            "bet": bet,
+            "cards": [],
+            "stand": False,
+            "cashout": False
+        }
+        bot.send_message(chat_id, f"{user_name} присоединился со ставкой {bet} монет.")
+
+        # Если набралось 3 игрока, запускаем игру
+        if len(game["players"]) == 3:
+            start_round(chat_id)
+
+        # Запускаем таймер на 3 минуты для автоматического старта
+        threading.Thread(target=wait_and_start, args=(chat_id,)).start()
+
+# ===================== Таймер ожидания =====================
+def wait_and_start(chat_id):
+    game = active_games.get(chat_id)
+    if not game or game["started"]:
         return
+    time.sleep(180)  # ждем 3 минуты
+    if not game["started"] and len(game["players"]) > 0:
+        start_round(chat_id)
 
-    # Если набралось 3 игрока или прошло 3 минуты
-    if len(game["players"]) == 3:
-        await start_round(chat_id)
-
-async def start_round(chat_id):
+# ===================== Игровой раунд =====================
+def start_round(chat_id):
     game = active_games[chat_id]
     if game["started"]:
         return
     game["started"] = True
-
-    # Раздаём карты
     deck = game["deck"]
     random.shuffle(deck)
+
+    # Раздача карт игрокам
     for player in game["players"].values():
         player["cards"].append(deck.pop())
         player["cards"].append(deck.pop())
 
+    # Дилер
     game["dealer"] = {"cards": [deck.pop(), deck.pop()]}
-    await bot.send_message(chat_id, "Игра начинается! Дилер раздает карты.\nИспользуйте команды /добор или /стоп или /кэш.")
 
-# Команда /добор
-@dp.message_handler(commands=['добор'])
-async def hit_card(message: types.Message):
+    bot.send_message(chat_id, "Игра начинается! Дилер раздает карты.\nИспользуйте команды /добор, /стоп или /кэш.")
+
+# ===================== Команды хода =====================
+@bot.message_handler(commands=['добор'])
+def hit_card(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     game = active_games.get(chat_id)
+
     if not game or user_id not in game["players"]:
-        await message.answer("Вы не участвуете в игре.")
+        bot.send_message(chat_id, "Вы не участвуете в игре.")
         return
-    if game["players"][user_id]["stand"]:
-        await message.answer("Вы уже остановились.")
+
+    player = game["players"][user_id]
+    if player["stand"]:
+        bot.send_message(chat_id, "Вы уже остановились.")
         return
+
     card = game["deck"].pop()
-    game["players"][user_id]["cards"].append(card)
-    total = calculate_total(game["players"][user_id]["cards"])
-    await message.answer(f"Вам выпала карта {card}. Всего: {total}")
+    player["cards"].append(card)
+    total = calculate_total(player["cards"])
+    bot.send_message(chat_id, f"{player['name']}, вам выпала карта {card}. Всего очков: {total}")
     if total > 21:
-        await message.answer("Перебор! Вы выбыли.")
-        game["players"][user_id]["stand"] = True
+        bot.send_message(chat_id, f"{player['name']}, перебор! Вы выбыли.")
+        player["stand"] = True
+        check_finish(chat_id)
 
-# Команда /стоп
-@dp.message_handler(commands=['стоп'])
-async def stand(message: types.Message):
+@bot.message_handler(commands=['стоп'])
+def stand(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     game = active_games.get(chat_id)
     if not game or user_id not in game["players"]:
-        await message.answer("Вы не участвуете в игре.")
+        bot.send_message(chat_id, "Вы не участвуете в игре.")
         return
     game["players"][user_id]["stand"] = True
-    await message.answer("Вы остановились.")
-    if all(p["stand"] or p["cashout"] for p in game["players"].values()):
-        await finish_game(chat_id)
+    bot.send_message(chat_id, f"{game['players'][user_id]['name']} остановился.")
+    check_finish(chat_id)
 
-# Команда /кэш
-@dp.message_handler(commands=['кэш'])
-async def cashout(message: types.Message):
+@bot.message_handler(commands=['кэш'])
+def cashout(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     game = active_games.get(chat_id)
     if not game or user_id not in game["players"]:
-        await message.answer("Вы не участвуете в игре.")
+        bot.send_message(chat_id, "Вы не участвуете в игре.")
         return
     bet = game["players"][user_id]["bet"]
     payout = int(bet * 0.7)
     players_balance[user_id] += payout
     game["players"][user_id]["cashout"] = True
-    await message.answer(f"Вы забрали 70% ставки: {payout} монет.")
-    if all(p["stand"] or p["cashout"] for p in game["players"].values()):
-        await finish_game(chat_id)
+    bot.send_message(chat_id, f"{game['players'][user_id]['name']} забрал 70% ставки: {payout} монет.")
+    check_finish(chat_id)
 
+# ===================== Проверка завершения игры =====================
+def check_finish(chat_id):
+    game = active_games.get(chat_id)
+    if not game:
+        return
+
+    if all(p["stand"] or p["cashout"] for p in game["players"].values()):
+        finish_game(chat_id)
+
+# ===================== Подсчет очков =====================
 def calculate_total(cards_list):
     total = 0
     aces = 0
@@ -176,13 +207,18 @@ def calculate_total(cards_list):
         aces -= 1
     return total
 
-async def finish_game(chat_id):
-    game = active_games[chat_id]
+# ===================== Завершение игры =====================
+def finish_game(chat_id):
+    game = active_games.get(chat_id)
+    if not game:
+        return
+
     dealer_total = calculate_total(game["dealer"]["cards"])
     # Дилер берет карты пока <17
     while dealer_total < 17:
         game["dealer"]["cards"].append(game["deck"].pop())
         dealer_total = calculate_total(game["dealer"]["cards"])
+
     result_text = f"Дилер имеет {dealer_total} очков, карты: {game['dealer']['cards']}\n"
     for uid, p in game["players"].items():
         total = calculate_total(p["cards"])
@@ -199,8 +235,10 @@ async def finish_game(chat_id):
         else:
             result_text += f"{p['name']}: Проигрыш\n"
 
-    await bot.send_message(chat_id, result_text)
+    bot.send_message(chat_id, result_text)
     del active_games[chat_id]
 
+# ===================== Запуск бота =====================
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    print("Бот запущен")
+    bot.polling()
