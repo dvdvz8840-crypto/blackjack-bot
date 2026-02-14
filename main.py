@@ -837,5 +837,59 @@ def mines_move(message):
     bot.send_message(message.chat.id,
                      f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.\n"
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
+                    
+# ---------------- Фарминг монет ----------------
+import random
+import time
+
+# Словарь для контроля cooldown команды бфарм
+farm_cooldowns = {}
+
+@bot.message_handler(func=lambda m: m.text.lower() == "бфарм")
+def farm(message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    first_name = message.from_user.first_name or username
+
+    now = time.time()
+    # Проверяем кд 10 секунд
+    if user_id in farm_cooldowns and now - farm_cooldowns[user_id] < 10:
+        bot.send_message(message.chat.id, "🕒 Подождите 10 сек. после отправки сообщения!")
+        return
+    farm_cooldowns[user_id] = now
+
+    # Проверяем есть ли глобальный таймер фарма (для 3 часов при неудаче)
+    cursor.execute("SELECT last_claim FROM daily_rewards WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    last_failed = row[0] if row else 0
+    if now - last_failed < 10800:  # 3 часа = 10800 секунд
+        remaining = 10800 - (now - last_failed)
+        hours = int(remaining // 3600)
+        minutes = int((remaining % 3600) // 60)
+        seconds = int(remaining % 60)
+        bot.send_message(message.chat.id, f"❌ Фарм не удался!\n{first_name} повторите попытку через {hours}ч {minutes}м {seconds}с!", parse_mode="HTML")
+        return
+
+    # Определяем успех фарма
+    if random.random() < 0.7:  # 70% успех
+        amount = random.randint(50, 999)
+        balance = get_balance(user_id)
+        update_balance(user_id, balance + amount)
+        # Отправляем сообщения с кликабельным именем
+        if username:
+            name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
+        else:
+            name_link = first_name
+        bot.send_message(message.chat.id, f"✅ Фарминг удался! +{amount} монет!\n\n💰 {name_link} <b>Ваш баланс обновлен:</b> {balance + amount}", parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        # Неудача фарма, ставим таймер 3 часа
+        now_time = int(time.time())
+        cursor.execute("INSERT OR REPLACE INTO daily_rewards (user_id, last_claim) VALUES (?, ?)", (user_id, now_time))
+        conn.commit()
+        if username:
+            name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
+        else:
+            name_link = first_name
+        bot.send_message(message.chat.id, f"❌ Фарм <b>не удался!</b>\n{name_link} повторите попытку через 3 часа!", parse_mode="HTML", disable_web_page_preview=True)
 # ---------------- Запуск ----------------
 bot.infinity_polling()
