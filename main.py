@@ -324,30 +324,29 @@ def admin_give(message):
 # ---------------- Мульти-плеер ----------------
 import threading
 
-multi_games = {}  # словарь для мульти-игр
+multi_games = {}  # хранение мульти-игр по chat_id
 
-# ---------------- Создание игры ----------------
+# ---------------- Создать мульти-игру ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("создать_игру"))
 def create_multi_game(message):
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        bot.send_message(message.chat.id, "❗ Используй: создать_игру сумма")
+        return
+    bet = int(parts[1])
+    if bet < 100:
+        bot.send_message(message.chat.id, "❌ Минимальная ставка 100")
+        return
+
     chat_id = message.chat.id
     user_id = message.from_user.id
     username = message.from_user.username
-    ensure_username(message)
-
-    parts = message.text.split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        bot.send_message(chat_id, "❗ Используй: создать_игру сумма")
-        return
-
-    bet = int(parts[1])
-    if bet < 100:
-        bot.send_message(chat_id, "❌ Минимальная ставка — 100")
-        return
 
     balance = get_balance(user_id)
-    if balance < bet:
+    if bet > balance:
         bot.send_message(chat_id, "❌ Недостаточно монет.")
         return
+
     update_balance(user_id, balance - bet)
 
     if chat_id in multi_games and multi_games[chat_id]['status'] == 'waiting':
@@ -355,13 +354,14 @@ def create_multi_game(message):
         return
 
     multi_games[chat_id] = {
-        'players': {user_id: {'hand': [], 'bet': bet, 'done': False, 'doubled': False}},
+        'players': {user_id: {'hand': [], 'bet': bet, 'done': False, 'doubled': False, 'username': username}},
         'deck': create_deck(),
         'status': 'waiting',
         'turn_order': [],
         'current': 0,
         'message_id': None,
-        'timer_thread': None
+        'timer_thread': None,
+        'dealer': []
     }
 
     join_markup = types.InlineKeyboardMarkup()
@@ -375,6 +375,7 @@ def create_multi_game(message):
         parse_mode="HTML",
         reply_markup=join_markup
     )
+
     multi_games[chat_id]['message_id'] = msg.message_id
 
     # Автостарт через 2 минуты
@@ -388,7 +389,8 @@ def create_multi_game(message):
     multi_games[chat_id]['timer_thread'] = t
     t.start()
 
-# ---------------- Присоединение к игре ----------------
+
+# ---------------- Присоединение ----------------
 @bot.callback_query_handler(func=lambda c: c.data == "join_multi")
 def join_multi(callback):
     chat_id = callback.message.chat.id
@@ -396,36 +398,29 @@ def join_multi(callback):
     username = callback.from_user.username
     update_username(user_id, username)
 
-    if chat_id not in multi_games:
+    if chat_id not in multi_games or multi_games[chat_id]['status'] != 'waiting':
         callback.answer("⚠ Игра неактивна.", show_alert=True)
         return
-
-    game = multi_games[chat_id]
-
-    if game['status'] != 'waiting':
-        callback.answer("⚠ Игра уже началась!", show_alert=True)
-        return
-
-    if user_id in game['players']:
+    if user_id in multi_games[chat_id]['players']:
         callback.answer("⚠ Ты уже в игре.", show_alert=True)
         return
 
-    bet = list(game['players'].values())[0]['bet']
     balance = get_balance(user_id)
+    bet = list(multi_games[chat_id]['players'].values())[0]['bet']
     if balance < bet:
         callback.answer("❌ Недостаточно средств для присоединения.", show_alert=True)
         return
 
     update_balance(user_id, balance - bet)
-    game['players'][user_id] = {'hand': [], 'bet': bet, 'done': False, 'doubled': False}
+    multi_games[chat_id]['players'][user_id] = {'hand': [], 'bet': bet, 'done': False, 'doubled': False, 'username': username}
     callback.answer("✅ Ты присоединился!")
 
-    # Обновляем сообщение — кнопка исчезает для присоединившегося
     update_multi_message(chat_id)
 
-    if len(game['players']) >= 9:
-        game['status'] = 'playing'
+    if len(multi_games[chat_id]['players']) >= 9:
+        multi_games[chat_id]['status'] = 'playing'
         start_multi_game(chat_id)
+
 
 # ---------------- Старт мульти-игры ----------------
 def start_multi_game(chat_id):
@@ -435,21 +430,22 @@ def start_multi_game(chat_id):
         game['players'][uid]['hand'] = [deck.pop(), deck.pop()]
     game['turn_order'] = list(game['players'].keys())
     game['current'] = 0
+    game['dealer'] = [deck.pop(), deck.pop()]
     game['status'] = 'playing'
     update_multi_message(chat_id)
 
-# ---------------- Обновление сообщения в чате ----------------
+
+# ---------------- Обновление сообщения ----------------
 def update_multi_message(chat_id):
     game = multi_games[chat_id]
     deck = game['deck']
-    dealer = [deck.pop(), "❓"]
+    dealer = game['dealer']
     text = f"🎴 Дилер: {dealer} = ?\n\n🧍 Игроки:\n"
     for idx, uid in enumerate(game['turn_order']):
         pdata = game['players'][uid]
-        name = f"@{get_username(uid) or uid}"
         val = hand_value(pdata['hand'])
         marker = "✅" if pdata['done'] else "⬅️" if idx == game['current'] else ""
-        text += f"{idx+1}. {name}: {pdata['hand']} = {val} {marker}\n"
+        text += f"{idx+1}. @{pdata['username']}: {pdata['hand']} = {val} {marker}\n"
 
     # Кнопки только для текущего игрока
     current_id = game['turn_order'][game['current']]
@@ -468,6 +464,7 @@ def update_multi_message(chat_id):
         bot.edit_message_text(chat_id=chat_id, message_id=game['message_id'], text=text, reply_markup=markup)
     except:
         pass
+
 
 # ---------------- Действия игрока ----------------
 @bot.callback_query_handler(func=lambda c: c.data.startswith("multi_"))
@@ -530,9 +527,10 @@ def multi_actions(callback):
             pdata['done']=True
         callback.answer("🔥 Дабл!")
         next_turn(chat_id)
-
     update_multi_message(chat_id)
 
+
+# ---------------- Следующий ход ----------------
 def next_turn(chat_id):
     game = multi_games[chat_id]
     while True:
@@ -545,17 +543,19 @@ def next_turn(chat_id):
             break
     update_multi_message(chat_id)
 
+
+# ---------------- Завершение мульти-игры ----------------
 def end_multi_game(chat_id):
     game = multi_games[chat_id]
     deck = game['deck']
-    dealer = [deck.pop(), deck.pop()]
+    dealer = game['dealer']
     while hand_value(dealer) < 17:
         dealer.append(deck.pop())
+
     text = f"🎴 Дилер: {dealer} = {hand_value(dealer)}\n\n🧍 Игроки:\n"
     for uid in game['turn_order']:
         pdata = game['players'][uid]
         val = hand_value(pdata['hand'])
-        name = f"@{get_username(uid) or uid}"
         bet = pdata['bet']
         balance = get_balance(uid)
         if val>21:
@@ -569,11 +569,12 @@ def end_multi_game(chat_id):
             result=f"🤝 Ничья. Ставка возвращена"
         else:
             result=f"😢 Проигрыш {bet} монет"
-        text+=f"{name}: {pdata['hand']} = {val} → {result}\n"
+        text+=f"@{pdata['username']}: {pdata['hand']} = {val} → {result}\n"
+
     try:
         bot.edit_message_text(chat_id=chat_id, message_id=game['message_id'], text=text)
     except:
-        bot.send_message(chat_id,text)
+        pass
     bot.send_message(chat_id,"🎮 Мульти-игра завершена!")
     del multi_games[chat_id]
 
