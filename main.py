@@ -156,11 +156,18 @@ def commands(message):
                      "📜 <b>бкоманды</b> — список команд",
                      parse_mode="HTML")
 
+@bot.message_handler(commands=['balance'])
+def balance_command(message):
+    send_balance(message)
+
 @bot.message_handler(func=lambda m: m.text.lower() == "бал")
-def balance_cmd(message):
-    ensure_username(message)
-    bal = get_balance(message.from_user.id)
-    bot.send_message(message.chat.id, f"💰 <b>Твой баланс:</b> {bal} монет", parse_mode="HTML")
+def balance_text(message):
+    send_balance(message)
+
+def send_balance(message):
+    user_id = message.from_user.id
+    balance = get_balance(user_id)
+    bot.send_message(message.chat.id, f"💰 Ваш баланс: {balance} монет")
 
 @bot.message_handler(func=lambda m: m.text.lower() == "деньги")
 def daily_reward(message):
