@@ -87,7 +87,14 @@ def join_table(message):
     bot.send_message(chat_id,"", reply_markup=types.ReplyKeyboardRemove())
 
     # добавляем игрока с пустой ставкой
-    game["players"].append({"id":user_id,"name":user_name,"hand":[],"bet":None,"stand=False,"cashout=False})
+    game["players"].append({
+        "id": user_id,
+        "name": user_name,
+        "hand": [],
+        "bet": None,
+        "stand": False,
+        "cashout": False
+    })
 
     # запрос ставки
     msg = bot.send_message(chat_id,f"🪙 {user_name}, введите вашу ставку:")
