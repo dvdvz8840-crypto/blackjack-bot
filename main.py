@@ -38,7 +38,7 @@ def start(message):
     bot.reply_to(message, f"🎮 Добро пожаловать в Blackjack!\n💰 Твой баланс: {balances[user_id]}")
 
 
-@bot.message_handler(commands=['balance'])
+@bot.message_handler(commands=['баланс'])
 def balance(message):
     user_id = message.from_user.id
     if user_id not in balances:
@@ -46,7 +46,7 @@ def balance(message):
     bot.reply_to(message, f"💰 Твой баланс: {balances[user_id]}")
 
 
-@bot.message_handler(commands=['blackjack'])
+@bot.message_handler(commands=['игра'])
 def blackjack(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -97,12 +97,12 @@ def start_game(chat_id):
     for player in game["players"]:
         message_text += f"{player['name']}: {player['hand']} (Очки: {calculate_score(player['hand'])})\n"
 
-    message_text += "\nПишите /hit или /stand"
+    message_text += "\nПишите /доб или /стоп"
 
     bot.send_message(chat_id, message_text)
 
 
-@bot.message_handler(commands=['hit'])
+@bot.message_handler(commands=['доб'])
 def hit(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -127,7 +127,7 @@ def hit(message):
     check_end(chat_id)
 
 
-@bot.message_handler(commands=['stand'])
+@bot.message_handler(commands=['стоп'])
 def stand(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -159,7 +159,7 @@ def end_game(chat_id):
     winner = None
 
     for player in game["players"]:
-        score = calculate_score(player["hand"])
+        score = calculate_score(player["доб"])
         if score <= 21 and score > best_score:
             best_score = score
             winner = player
@@ -167,7 +167,7 @@ def end_game(chat_id):
     result_text = "🏁 Игра окончена!\n\n"
 
     for player in game["players"]:
-        score = calculate_score(player["hand"])
+        score = calculate_score(player["доб"])
         result_text += f"{player['name']}: {score}\n"
 
     if winner:
