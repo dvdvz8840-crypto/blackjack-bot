@@ -590,7 +590,6 @@ def create_clan(message):
         return
     clan_name = parts[2].strip()
     user_id = message.from_user.id
-    username = message.from_user.username
 
     cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
     if cursor.fetchone():
@@ -665,7 +664,6 @@ def delete_clan(message):
         return
     clan_id = row[0]
 
-    # Удаляем всех участников и сам клан
     cursor.execute("DELETE FROM clan_members WHERE clan_id=?", (clan_id,))
     cursor.execute("DELETE FROM clans WHERE clan_id=?", (clan_id,))
     conn.commit()
@@ -696,43 +694,6 @@ def list_clans(message):
 
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-# ---------------- Список участников конкретного клана ----------------
-@bot.message_handler(func=lambda m: m.text.lower().startswith("буклана "))
-def clan_members_list(message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.send_message(message.chat.id, "❗ Используй: буклана <название клана>")
-        return
-    clan_name = parts[1].strip()
-
-    cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
-    row = cursor.fetchone()
-    if not row:
-        bot.send_message(message.chat.id, f"❌ Клан <b>{clan_name}</b> не найден!", parse_mode="HTML")
-        return
-    clan_id = row[0]
-
-    cursor.execute("""
-        SELECT u.user_id, u.username, u.first_name, u.balance
-        FROM clan_members cm
-        JOIN users u ON cm.user_id=u.user_id
-        WHERE cm.clan_id=?
-    """, (clan_id,))
-    members = cursor.fetchall()
-    if not members:
-        bot.send_message(message.chat.id, f"⚠ В клане <b>{clan_name}</b> пока нет участников.", parse_mode="HTML")
-        return
-
-    text = f"🏰 <b>Участники клана {clan_name}</b>\n\n"
-    for idx, (uid, username, first_name, balance) in enumerate(members, start=1):
-        if username:
-            name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
-        else:
-            name_link = first_name
-        text += f"{idx}. {name_link} 💰 {balance}\n"
-
-    bot.send_message(message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True)
-
 # ---------------- Справка по кланам ----------------
 @bot.message_handler(func=lambda m: m.text.lower() == "бкинфо")
 def clans_info(message):
@@ -742,8 +703,7 @@ def clans_info(message):
         "✅ Вступить в клан: бвступить <название клана>\n"
         "✅ Выйти из клана: бвыйти\n"
         "✅ Удалить клан: бклан удалить <название клана>\n"
-        "✅ Список кланов: кланы\n"
-        "✅ Список участников конкретного клана: буклана <название клана>"
+        "✅ Список кланов: кланы"
     )
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 # ---------------- Запуск ----------------
