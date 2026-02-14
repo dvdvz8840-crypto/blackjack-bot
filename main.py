@@ -839,8 +839,6 @@ def mines_move(message):
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
 # ---------------- Дуэли 1v1 ----------------
-from telebot import types
-import random
 
 duels = {}  # Словарь активных дуэлей: chat_id -> duel_data
 
