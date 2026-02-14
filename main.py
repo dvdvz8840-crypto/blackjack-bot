@@ -841,145 +841,170 @@ def mines_move(message):
                      f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.\n"
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
-# ================== ДУЭЛИ 1VS1 ==================
-duels = {}
+# ================== ROULETTE PRO ==================
+roulette_red = {
+    1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36
+}
 
-def duel_update_balance(user_id, amount):
-    balance = get_balance(user_id)
-    update_balance(user_id, balance + amount)
+roulette_state = {}
+jackpot_amount = 0
+roulette_stats = {}
 
-@bot.message_handler(commands=['бдуэль'])
-def duel_command(message):
+# --- Команда запуска ---
+@bot.message_handler(commands=['брулетка'])
+def roulette_start(message):
     ensure_username(message)
 
     parts = message.text.split()
-    if len(parts) != 3:
-        bot.send_message(message.chat.id, "❗ Используй: /бдуэль @username ставка")
+    if len(parts) != 2:
+        bot.send_message(message.chat.id,
+                         "❗ Используй: /брулетка ставка")
         return
 
-    opponent_username = parts[1].replace("@", "").lower()
-
     try:
-        bet = int(parts[2])
+        bet = int(parts[1])
         if bet <= 0:
             raise ValueError
     except:
-        bot.send_message(message.chat.id, "❗ Ставка должна быть положительным числом")
+        bot.send_message(message.chat.id, "❗ Ставка должна быть числом")
         return
 
-    player_id = message.from_user.id
-    player_balance = get_balance(player_id)
+    user_id = message.from_user.id
+    balance = get_balance(user_id)
 
-    cursor.execute("SELECT user_id, balance FROM users WHERE LOWER(username)=?", (opponent_username,))
-    row = cursor.fetchone()
-
-    if not row:
-        bot.send_message(message.chat.id, "❌ Игрок не найден")
-        return
-
-    opponent_id, opponent_balance = row
-
-    if opponent_id == player_id:
-        bot.send_message(message.chat.id, "❌ Нельзя вызвать себя")
-        return
-
-    if player_balance < bet:
+    if balance < bet:
         bot.send_message(message.chat.id, "❌ Недостаточно средств")
         return
 
-    if opponent_balance < bet:
-        bot.send_message(message.chat.id, "❌ У соперника недостаточно средств")
-        return
-
-    if message.chat.id in duels:
-        bot.send_message(message.chat.id, "⚠ В этом чате уже идет дуэль")
-        return
-
-    # списываем ставки
-    update_balance(player_id, player_balance - bet)
-    update_balance(opponent_id, opponent_balance - bet)
-
-    duels[message.chat.id] = {
-        "players": [player_id, opponent_id],
-        "turn": player_id,
-        "bet": bet,
-        "shield": {}
+    roulette_state[user_id] = {
+        "bet": bet
     }
-
-    send_duel_message(message.chat.id)
-
-
-def send_duel_message(chat_id):
-    duel = duels[chat_id]
-    turn = duel["turn"]
 
     markup = types.InlineKeyboardMarkup()
     markup.row(
-        types.InlineKeyboardButton("🔫 Выстрел", callback_data="duel_shoot"),
-        types.InlineKeyboardButton("🛡 Защититься", callback_data="duel_shield")
+        types.InlineKeyboardButton("🔴 Красное x2", callback_data="roulette_red"),
+        types.InlineKeyboardButton("⚫ Черное x2", callback_data="roulette_black")
+    )
+    markup.row(
+        types.InlineKeyboardButton("🟢 Зеленое x14", callback_data="roulette_green")
     )
 
     bot.send_message(
-        chat_id,
-        f"⚔ <b>Дуэль началась!</b>\n"
-        f"💰 Ставка: {duel['bet']}\n\n"
-        f"Ход игрока: <code>{turn}</code>",
+        message.chat.id,
+        f"🎰 <b>РУЛЕТКА</b>\n"
+        f"💰 Ставка: {bet}\n"
+        f"💎 Джекпот: {jackpot_amount}\n\n"
+        f"Выбери цвет:",
         parse_mode="HTML",
         reply_markup=markup
     )
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("duel_"))
-def duel_callback(call):
-    chat_id = call.message.chat.id
+# --- Callback рулетки ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith("roulette_"))
+def roulette_play(call):
+    global jackpot_amount
 
-    if chat_id not in duels:
+    user_id = call.from_user.id
+
+    if user_id not in roulette_state:
+        bot.answer_callback_query(call.id, "❌ Игра не найдена")
         return
 
-    duel = duels[chat_id]
-    player_id = call.from_user.id
+    bet = roulette_state[user_id]["bet"]
+    choice = call.data.split("_")[1]
 
-    if player_id != duel["turn"]:
-        bot.answer_callback_query(call.id, "⛔ Сейчас не твой ход")
+    balance = get_balance(user_id)
+
+    if balance < bet:
+        bot.answer_callback_query(call.id, "❌ Недостаточно средств")
         return
 
-    opponent = [p for p in duel["players"] if p != player_id][0]
+    # списываем ставку
+    update_balance(user_id, balance - bet)
 
-    action = call.data.split("_")[1]
+    # 1% в джекпот
+    jackpot_cut = int(bet * 0.01)
+    jackpot_amount += jackpot_cut
 
-    # Если выстрел
-    if action == "shoot":
-        shielded = duel["shield"].get(opponent, False)
-        chance = 35 if shielded else 50
+    msg = call.message
 
-        if random.randint(1, 100) <= chance:
-            win_amount = duel["bet"] * 2
-            duel_update_balance(player_id, win_amount)
+    # 🎡 Анимация кручения
+    for i in range(6):
+        bot.edit_message_text(
+            f"🎡 Крутим рулетку{'.' * (i % 3 + 1)}",
+            msg.chat.id,
+            msg.message_id
+        )
+        time.sleep(0.4)
 
-            bot.edit_message_text(
-                f"🎯 Выстрел попал!\n\n"
-                f"🏆 Победитель: <code>{player_id}</code>\n"
-                f"💰 Выигрыш: {win_amount}",
-                chat_id,
-                call.message.message_id,
-                parse_mode="HTML"
-            )
+    # Выпадает число
+    number = random.randint(0, 36)
 
-            del duels[chat_id]
-            return
+    if number == 0:
+        result_color = "green"
+        emoji = "🟢"
+    elif number in roulette_red:
+        result_color = "red"
+        emoji = "🔴"
+    else:
+        result_color = "black"
+        emoji = "⚫"
+
+    win = False
+    multiplier = 0
+
+    if choice == result_color:
+        win = True
+        if result_color == "green":
+            multiplier = 14
         else:
-            bot.answer_callback_query(call.id, "❌ Промах")
+            multiplier = 2
 
-    # Если защита
-    if action == "shield":
-        duel["shield"][player_id] = True
-        bot.answer_callback_query(call.id, "🛡 Ты защитился")
+    text_result = (
+        f"🎰 Выпало число: {number} {emoji}\n"
+        f"💎 Джекпот: {jackpot_amount}\n\n"
+    )
 
-    # Передаем ход
-    duel["turn"] = opponent
-    duel["shield"][player_id] = False
+    if win:
+        win_amount = bet * multiplier
+        update_balance(user_id, get_balance(user_id) + win_amount)
 
-    send_duel_message(chat_id)
+        # шанс 5% забрать джекпот при зеленом
+        if result_color == "green" and random.randint(1,100) <= 5:
+            update_balance(user_id, get_balance(user_id) + jackpot_amount)
+            text_result += f"💎 ДЖЕКПОТ ВЫИГРАН: {jackpot_amount}!\n"
+            jackpot_amount = 0
+
+        text_result += f"🎉 Ты выиграл {win_amount} монет!"
+        roulette_stats[user_id] = roulette_stats.get(user_id, 0) + win_amount
+    else:
+        text_result += f"😢 Ты проиграл {bet} монет."
+
+    bot.edit_message_text(
+        text_result,
+        msg.chat.id,
+        msg.message_id
+    )
+
+    del roulette_state[user_id]
+
+
+# --- Рейтинг ---
+@bot.message_handler(commands=['брейтинг'])
+def roulette_rating(message):
+    if not roulette_stats:
+        bot.send_message(message.chat.id, "Пока нет победителей.")
+        return
+
+    sorted_stats = sorted(roulette_stats.items(), key=lambda x: x[1], reverse=True)
+
+    text = "🏆 <b>ТОП ИГРОКОВ РУЛЕТКИ</b>\n\n"
+
+    for i, (user_id, amount) in enumerate(sorted_stats[:10], start=1):
+        text += f"{i}. {user_id} — {amount} монет\n"
+
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
     
 # ------------------- Безопасный запуск бота -------------------
 import sys
