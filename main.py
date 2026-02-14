@@ -839,34 +839,34 @@ def mines_move(message):
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
 # ------------------- Дуэль 1v1 -------------------
+duels = {}  # chat_id -> duel
 
-duels = {}  # активные дуэли: chat_id -> duel
-
-@bot.message_handler(func=lambda m: m.text and m.text.lower().startswith("бдуэль"))
+@bot.message_handler(func=lambda m: m.text and "бдуэль" in m.text.lower())
 def start_duel(message):
-    ensure_username(message)  # если у тебя есть функция, которая создает username
+    if not message.text:
+        return
 
     parts = message.text.strip().split()
     if len(parts) < 3:
         bot.send_message(message.chat.id, "❗ Используй: бдуэль @username ставка")
         return
 
+    # получаем ник и ставку
     target_username = parts[1].lstrip("@").lower()
     try:
         bet = int(parts[2])
-    except:
+    except ValueError:
         bot.send_message(message.chat.id, "❗ Ставка должна быть числом!")
         return
 
-    # Найти противника по username
+    player_id = message.from_user.id
     cursor.execute("SELECT user_id, balance, username, first_name FROM users WHERE LOWER(username)=?", (target_username,))
     row = cursor.fetchone()
     if not row:
         bot.send_message(message.chat.id, f"❌ Игрок @{target_username} не найден!")
         return
 
-    opp_id, opp_balance, opp_user, opp_name = row
-    player_id = message.from_user.id
+    opp_id, opp_balance, opp_username, opp_name = row
     player_balance = get_balance(player_id)
 
     if player_id == opp_id:
@@ -891,7 +891,7 @@ def start_duel(message):
     duels[message.chat.id] = {
         "players": {
             player_id: {"username": message.from_user.username, "first_name": message.from_user.first_name},
-            opp_id: {"username": opp_user, "first_name": opp_name}
+            opp_id: {"username": opp_username, "first_name": opp_name}
         },
         "turn": player_id,
         "bet": bet,
@@ -903,9 +903,11 @@ def start_duel(message):
 def send_duel_status(chat_id):
     duel = duels[chat_id]
     turn_id = duel["turn"]
-    text = f"⚔ Дуэль началась!\n"
+
+    text = "⚔ Дуэль началась!\n"
     for uid, p in duel["players"].items():
         text += f"<a href='https://t.me/{p['username']}'>{p['first_name']}</a> 💰 Ставка: {duel['bet']}\n"
+
     text += f"\nХод игрока: <a href='https://t.me/{duel['players'][turn_id]['username']}'>{duel['players'][turn_id]['first_name']}</a>"
 
     markup = types.InlineKeyboardMarkup()
@@ -932,7 +934,6 @@ def duel_action(call):
     action_type = call.data.split("_")[0]
     opponent_id = [uid for uid in duel["players"] if uid != turn_id][0]
 
-    # вероятность попадания
     prev_action = duel.get("actions", {}).get(opponent_id)
     hit_chance = 35 if prev_action == "shield" else 50
 
@@ -957,7 +958,7 @@ def duel_action(call):
     duel.setdefault("actions", {})[turn_id] = action_type
     duel["turn"] = opponent_id
     send_duel_status(chat_id)
-
+    
 # ------------------- Безопасный запуск бота -------------------
 import sys
 import time
