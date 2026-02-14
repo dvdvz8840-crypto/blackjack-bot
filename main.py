@@ -167,18 +167,21 @@ def balance_text(message):
 def send_balance(message):
     user_id = message.from_user.id
     username = message.from_user.username
+    first_name = message.from_user.first_name
     balance = get_balance(user_id)
 
-    # Если нет юзернейма — используем имя
     if username:
-        name = f"@{username}"
+        # Кликабельная ссылка на профиль
+        name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
     else:
-        name = message.from_user.first_name
+        # Если нет username — просто имя без ссылки
+        name_link = first_name
 
     bot.send_message(
         message.chat.id,
-        f"{name} 💰 <b>Ваш баланс:</b> {balance} монет",
-        parse_mode="HTML"
+        f"{name_link} 💰 <b>Ваш баланс:</b> {balance} монет",
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
 
 @bot.message_handler(func=lambda m: m.text.lower() == "деньги")
