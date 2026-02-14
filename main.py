@@ -841,45 +841,45 @@ def mines_move(message):
                      f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.\n"
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
-# ================== ROULETTE PRO ==================
+import threading
+
+# ------------------- ROULETTE -------------------
 roulette_red = {
     1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36
 }
 
-roulette_state = {}
-jackpot_amount = 0
-roulette_stats = {}
+roulette_black = {
+    2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35
+}
 
-# --- Команда запуска ---
+roulette_state = {}  # message_id -> {"user_id":..., "bet":..., "choice":...}
+roulette_jackpot = 0
+roulette_stats = {}
+roulette_lock = set()  # user_id, кто сейчас крутит
+
+# --- Команда запуска рулетки ---
 @bot.message_handler(commands=['брулетка'])
 def roulette_start(message):
     ensure_username(message)
-
     parts = message.text.split()
     if len(parts) != 2:
-        bot.send_message(message.chat.id,
-                         "❗ Используй: /брулетка ставка")
+        bot.send_message(message.chat.id, "❗ Используй: /брулетка ставка")
         return
-
     try:
         bet = int(parts[1])
         if bet <= 0:
             raise ValueError
     except:
-        bot.send_message(message.chat.id, "❗ Ставка должна быть числом")
+        bot.send_message(message.chat.id, "❗ Ставка должна быть числом больше 0")
         return
 
     user_id = message.from_user.id
     balance = get_balance(user_id)
-
     if balance < bet:
         bot.send_message(message.chat.id, "❌ Недостаточно средств")
         return
 
-    roulette_state[user_id] = {
-        "bet": bet
-    }
-
+    # Ставка списывается только при вращении
     markup = types.InlineKeyboardMarkup()
     markup.row(
         types.InlineKeyboardButton("🔴 Красное x2", callback_data="roulette_red"),
@@ -891,106 +891,119 @@ def roulette_start(message):
 
     bot.send_message(
         message.chat.id,
-        f"🎰 <b>РУЛЕТКА</b>\n"
-        f"💰 Ставка: {bet}\n"
-        f"💎 Джекпот: {jackpot_amount}\n\n"
-        f"Выбери цвет:",
+        f"🎰 <b>РУЛЕТКА</b>\n💰 Ставка: {bet}\n💎 Джекпот: {roulette_jackpot}\n\nВыбери цвет:",
         parse_mode="HTML",
         reply_markup=markup
     )
+
+    # Сохраняем состояние (ставка, юзер)
+    # Пока без choice, оно заполняется при нажатии кнопки
+    # message_id добавится автоматически при callback
+    # У нас callback обрабатывает user_id
+    roulette_state[user_id] = {"bet": bet}
 
 
 # --- Callback рулетки ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("roulette_"))
 def roulette_play(call):
-    global jackpot_amount
+    global roulette_jackpot
 
     user_id = call.from_user.id
-
     if user_id not in roulette_state:
-        bot.answer_callback_query(call.id, "❌ Игра не найдена")
+        bot.answer_callback_query(call.id, "❌ Игра не найдена или ставка не сделана")
         return
+
+    if user_id in roulette_lock:
+        bot.answer_callback_query(call.id, "⏳ Рулетка уже крутится, подожди")
+        return
+
+    roulette_lock.add(user_id)
 
     bet = roulette_state[user_id]["bet"]
     choice = call.data.split("_")[1]
-
     balance = get_balance(user_id)
 
     if balance < bet:
         bot.answer_callback_query(call.id, "❌ Недостаточно средств")
+        roulette_lock.remove(user_id)
         return
 
-    # списываем ставку
+    # Списываем ставку
     update_balance(user_id, balance - bet)
 
     # 1% в джекпот
-    jackpot_cut = int(bet * 0.01)
-    jackpot_amount += jackpot_cut
+    jackpot_cut = max(int(bet * 0.01), 1)
+    roulette_jackpot += jackpot_cut
 
     msg = call.message
 
-    # 🎡 Анимация кручения
-    for i in range(6):
-        bot.edit_message_text(
-            f"🎡 Крутим рулетку{'.' * (i % 3 + 1)}",
-            msg.chat.id,
-            msg.message_id
-        )
-        time.sleep(0.4)
+    # --- Функция вращения рулетки в отдельном потоке ---
+    def spin_roulette():
+        # 🎡 Анимация
+        for i in range(6):
+            try:
+                bot.edit_message_text(
+                    f"🎡 Крутим рулетку{'.' * (i % 3 + 1)}",
+                    msg.chat.id,
+                    msg.message_id
+                )
+            except:
+                pass
+            time.sleep(0.4)
 
-    # Выпадает число
-    number = random.randint(0, 36)
-
-    if number == 0:
-        result_color = "green"
-        emoji = "🟢"
-    elif number in roulette_red:
-        result_color = "red"
-        emoji = "🔴"
-    else:
-        result_color = "black"
-        emoji = "⚫"
-
-    win = False
-    multiplier = 0
-
-    if choice == result_color:
-        win = True
-        if result_color == "green":
-            multiplier = 14
+        # Выпадает число
+        number = random.randint(0, 36)
+        if number == 0:
+            result_color = "green"
+            emoji = "🟢"
+        elif number in roulette_red:
+            result_color = "red"
+            emoji = "🔴"
         else:
-            multiplier = 2
+            result_color = "black"
+            emoji = "⚫"
 
-    text_result = (
-        f"🎰 Выпало число: {number} {emoji}\n"
-        f"💎 Джекпот: {jackpot_amount}\n\n"
-    )
+        win = False
+        multiplier = 0
 
-    if win:
-        win_amount = bet * multiplier
-        update_balance(user_id, get_balance(user_id) + win_amount)
+        if choice == result_color:
+            win = True
+            multiplier = 14 if result_color == "green" else 2
 
-        # шанс 5% забрать джекпот при зеленом
-        if result_color == "green" and random.randint(1,100) <= 5:
-            update_balance(user_id, get_balance(user_id) + jackpot_amount)
-            text_result += f"💎 ДЖЕКПОТ ВЫИГРАН: {jackpot_amount}!\n"
-            jackpot_amount = 0
+        text_result = f"🎰 Выпало число: {number} {emoji}\n💎 Джекпот: {roulette_jackpot}\n\n"
 
-        text_result += f"🎉 Ты выиграл {win_amount} монет!"
-        roulette_stats[user_id] = roulette_stats.get(user_id, 0) + win_amount
-    else:
-        text_result += f"😢 Ты проиграл {bet} монет."
+        if win:
+            win_amount = bet * multiplier
+            update_balance(user_id, get_balance(user_id) + win_amount)
 
-    bot.edit_message_text(
-        text_result,
-        msg.chat.id,
-        msg.message_id
-    )
+            # шанс 5% забрать джекпот при зеленом
+            if result_color == "green" and random.randint(1,100) <= 5:
+                update_balance(user_id, get_balance(user_id) + roulette_jackpot)
+                text_result += f"💎 ДЖЕКПОТ ВЫИГРАН: {roulette_jackpot}!\n"
+                roulette_jackpot = 0
 
-    del roulette_state[user_id]
+            text_result += f"🎉 Ты выиграл {win_amount} монет!"
+            roulette_stats[user_id] = roulette_stats.get(user_id, 0) + win_amount
+        else:
+            text_result += f"😢 Ты проиграл {bet} монет."
+
+        try:
+            bot.edit_message_text(
+                text_result,
+                msg.chat.id,
+                msg.message_id
+            )
+        except:
+            pass
+
+        roulette_lock.remove(user_id)
+        del roulette_state[user_id]
+
+    threading.Thread(target=spin_roulette).start()
+    bot.answer_callback_query(call.id, "🎲 Рулетка крутится!")
 
 
-# --- Рейтинг ---
+# --- Рейтинг рулетки ---
 @bot.message_handler(commands=['брейтинг'])
 def roulette_rating(message):
     if not roulette_stats:
@@ -998,12 +1011,15 @@ def roulette_rating(message):
         return
 
     sorted_stats = sorted(roulette_stats.items(), key=lambda x: x[1], reverse=True)
-
     text = "🏆 <b>ТОП ИГРОКОВ РУЛЕТКИ</b>\n\n"
-
     for i, (user_id, amount) in enumerate(sorted_stats[:10], start=1):
-        text += f"{i}. {user_id} — {amount} монет\n"
-
+        cursor.execute("SELECT username, first_name FROM users WHERE user_id=?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            username = row[0] or str(user_id)
+        else:
+            username = str(user_id)
+        text += f"{i}. @{username} — {amount} монет\n"
     bot.send_message(message.chat.id, text, parse_mode="HTML")
     
 # ------------------- Безопасный запуск бота -------------------
