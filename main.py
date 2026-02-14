@@ -3,7 +3,6 @@ from telebot import types
 import random
 import sqlite3
 import time
-import threading
 
 TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"
 ADMIN_ID = 6151671553
@@ -30,7 +29,7 @@ CREATE TABLE IF NOT EXISTS daily_rewards (
 """)
 conn.commit()
 
-# ---------------- Баланс ----------------
+# ---------------- Функции работы с балансом ----------------
 def get_balance(user_id):
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
@@ -54,14 +53,11 @@ def update_username(user_id, username):
             cursor.execute("UPDATE users SET username=? WHERE user_id=?", (username, user_id))
         conn.commit()
 
-# ---------------- Обновление username при каждом сообщении ----------------
-@bot.message_handler(func=lambda m: True)
-def auto_update_username(message):
+def ensure_username(message):
     update_username(message.from_user.id, message.from_user.username)
 
 # ---------------- Блэкджек ----------------
 games = {}           # Соло-игра: user_id -> game
-multiplayer_games = {}  # Мульти: chat_id -> game
 cooldowns = {}       # Для бкоманды
 
 def create_deck():
@@ -131,6 +127,7 @@ def claim_daily(user_id, amount=500):
 # ---------------- Команды ----------------
 @bot.message_handler(commands=["start"])
 def start(message):
+    ensure_username(message)
     get_balance(message.from_user.id)
     bot.send_message(message.chat.id,
                      "🎰 Добро пожаловать в BlackJack!\n\n"
@@ -141,6 +138,7 @@ def start(message):
 
 @bot.message_handler(func=lambda m: m.text.lower() == "бкоманды")
 def commands(message):
+    ensure_username(message)
     user_id = message.from_user.id
     now = time.time()
     if user_id in cooldowns and now - cooldowns[user_id] < 60:
@@ -158,11 +156,13 @@ def commands(message):
 
 @bot.message_handler(func=lambda m: m.text.lower() == "бал")
 def balance_cmd(message):
+    ensure_username(message)
     bal = get_balance(message.from_user.id)
     bot.send_message(message.chat.id, f"💰 <b>Твой баланс:</b> {bal} монет", parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text.lower() == "деньги")
 def daily_reward(message):
+    ensure_username(message)
     user_id = message.from_user.id
     success, result = claim_daily(user_id)
     if success:
@@ -173,6 +173,7 @@ def daily_reward(message):
 # ---------------- Перевод по username ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("перевод"))
 def transfer(message):
+    ensure_username(message)
     parts = message.text.split()
     if len(parts) != 3:
         bot.send_message(message.chat.id, "❗ Используй: перевод @username сумма")
@@ -198,6 +199,7 @@ def transfer(message):
 # ---------------- Админская выдача по username ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("админвыдать"))
 def admin_give(message):
+    ensure_username(message)
     if message.from_user.id != ADMIN_ID:
         return
     parts = message.text.split()
