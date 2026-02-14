@@ -5,7 +5,7 @@ import threading
 import time
 from functools import partial
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"
 bot = telebot.TeleBot(TOKEN)
 
 # ================== Настройки ==================
