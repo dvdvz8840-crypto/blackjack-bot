@@ -707,9 +707,12 @@ def clans_info(message):
     )
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-# ---------------- Мины текстовое управление ----------------
-mines_games = {}
+import random
 
+# ---------------- Мины ----------------
+mines_game = {}  # ключ = user_id, значение = словарь с игрой
+
+# Множители для разных кол-ва мин
 multipliers = {
     3: [1.07,1.23,1.41,1.64,1.91, 2.24,2.62,3.04,3.53,4.09,
         4.73,5.46,6.31,7.28,8.40,9.67,11.12,12.77,14.66,16.83,19.33,22.21][:22],
@@ -717,103 +720,84 @@ multipliers = {
         16.45,21.50,28.08,36.67,47.92,62.64,81.87,107.00,139.79,182.55][:20],
     10: [1.58,2.71,4.80,8.80,16.80,32.10,61.32,117.20,224.0,428.0,
          816.0,1556.0,2968.0,5650.0,10753.0][:15],
-    24: [23.75]  # шанс 5%
+    24: [9999]  # шанс ~5%
 }
 
 # ---------------- Команда бмины ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("бмины"))
 def start_mines(message):
-    ensure_username(message)
     user_id = message.from_user.id
-    if user_id in mines_games and not mines_games[user_id]['finished']:
-        bot.send_message(message.chat.id, "⚠ У тебя уже запущена игра Мины. Заверши её перед новой.")
+    if user_id in mines_game:
+        bot.send_message(message.chat.id, "⚠ У тебя уже активная игра в Мины!")
         return
-
     parts = message.text.split()
     if len(parts) < 2 or not parts[1].isdigit():
         bot.send_message(message.chat.id, "❗ Используй: бмины <сумма ставки>")
         return
     bet = int(parts[1])
-    if bet < 100:
-        bot.send_message(message.chat.id, "❌ Минимальная ставка — 100")
-        return
     balance = get_balance(user_id)
     if bet > balance:
-        bot.send_message(message.chat.id, "❌ Недостаточно средств.")
+        bot.send_message(message.chat.id, "❌ Недостаточно монет.")
         return
-    update_balance(user_id, balance - bet)
+    if bet < 100:
+        bot.send_message(message.chat.id, "❌ Минимальная ставка 100.")
+        return
 
-    mines_games[user_id] = {
-        'bet': bet,
-        'mines': 0,
-        'step': 0,
-        'current_win': 0,
-        'finished': False,
-        'chosen_cells': []
+    update_balance(user_id, balance - bet)
+    mines_game[user_id] = {
+        "bet": bet,
+        "mines": 0,
+        "field": list(range(1,26)),  # поле 5x5
+        "steps": 0,
+        "current_win": 0,
+        "active": True
     }
 
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("3 мины", "5 мин", "10 мин", "24 мины")
-    bot.send_message(message.chat.id, f"✅ Ставка принята: {bet} монет.\nВыберите количество мин на поле 5×5 (максимум 24):", reply_markup=markup)
+    bot.send_message(message.chat.id, f"✅ Сумма ставки принята: {bet} монет.\nВыберите количество мин на поле: 3, 5, 10 или 24.")
 
 # ---------------- Выбор мин ----------------
-@bot.message_handler(func=lambda m: m.text.lower() in ["3 мины","5 мин","10 мин","24 мины"])
-def select_mines(message):
+@bot.message_handler(func=lambda m: m.text in ["3","5","10","24"])
+def choose_mines(message):
     user_id = message.from_user.id
-    if user_id not in mines_games:
+    if user_id not in mines_game or mines_game[user_id]["mines"] != 0:
         return
-    mines = int(message.text.split()[0])
-    game = mines_games[user_id]
-    game['mines'] = mines
-    bot.send_message(message.chat.id, f"🎮 Поле готово! {mines} мин.\nВыбирайте клетку (1–25) или напишите '💰 Забрать', чтобы забрать текущий выигрыш.")
+    mines = int(message.text)
+    mines_game[user_id]["mines"] = mines
+    # случайно расставляем мины
+    mines_game[user_id]["mine_positions"] = random.sample(mines_game[user_id]["field"], mines)
+    bot.send_message(message.chat.id, f"🎮 Поле готово! {mines} мин.\nВыбирайте клетку или напишите 'Забрать', чтобы забрать текущий выигрыш.")
 
-# ---------------- Выбор клетки или кэш ----------------
-@bot.message_handler(func=lambda m: True)
-def mines_play(message):
+# ---------------- Ход игрока ----------------
+@bot.message_handler(func=lambda m: m.text.isdigit() or m.text.lower() == "забрать")
+def play_mines(message):
     user_id = message.from_user.id
-    if user_id not in mines_games:
+    if user_id not in mines_game or not mines_game[user_id]["active"]:
         return
-    game = mines_games[user_id]
-    if game['finished'] or game['mines'] == 0:
-        return
+    game = mines_game[user_id]
 
-    text = message.text.strip()
-    if text == "💰 Забрать":
-        game['finished'] = True
-        update_balance(user_id, get_balance(user_id)+game['current_win'])
-        bot.send_message(message.chat.id, f"💰 Вы забрали {game['current_win']} монет. Игра завершена!")
-        del mines_games[user_id]
+    if message.text.lower() == "забрать":
+        win = int(game["current_win"])
+        update_balance(user_id, get_balance(user_id) + win)
+        bot.send_message(message.chat.id, f"💰 Вы забрали {win} монет. На {multipliers[game['mines']][game['steps']-1]}x\nИгра завершена!")
+        del mines_game[user_id]
         return
 
-    if not text.isdigit():
-        return
-    cell = int(text)
-    if cell < 1 or cell > 25 or cell in game['chosen_cells']:
-        bot.send_message(message.chat.id, "❗ Выберите корректную клетку (1–25), которую ещё не открыли.")
+    cell = int(message.text)
+    if cell not in game["field"]:
+        bot.send_message(message.chat.id, "❌ Неверная клетка, выберите число от 1 до 25.")
         return
 
-    game['chosen_cells'].append(cell)
-    mines_count = game['mines']
-    step = game['step']
-    bet = game['bet']
-
-    # проверка на мину
-    if mines_count == 24:
-        safe = random.random() < 0.05
-    else:
-        safe = random.random() > (mines_count / 25)
-
-    if not safe:
-        game['finished'] = True
-        bot.send_message(message.chat.id, f"💥 Вы попали на мину! Проиграли {bet} монет на шаге {step+1}.")
-        del mines_games[user_id]
+    if cell in game["mine_positions"]:
+        bot.send_message(message.chat.id, f"💥 Вы наткнулись на мину! Ставка {game['bet']} проиграна.\nИгра завершена!")
+        del mines_game[user_id]
         return
 
-    # выигрыш
-    mults = multipliers[mines_count]
-    current_mult = mults[step] if step < len(mults) else mults[-1]
-    game['current_win'] = int(bet * current_mult)
-    game['step'] += 1
-    bot.send_message(message.chat.id, f"✅ Шаг {step+1} пройден! Текущий выигрыш: {game['current_win']} монет.\nВыберите следующую клетку или напишите '💰 Забрать'.")
+    # успешный ход
+    game["steps"] += 1
+    x = multipliers[game["mines"]][game["steps"]-1] if game["mines"] != 24 else multipliers[24][0]
+    game["current_win"] = int(game["bet"] * x)
+    game["field"].remove(cell)
+
+    bot.send_message(message.chat.id, f"✅ Шаг {game['steps']} пройден! Текущий выигрыш: {game['current_win']} монет.\nВыберите следующую клетку или напишите 'Забрать'.")
 # ---------------- Запуск ----------------
 bot.infinity_polling()
