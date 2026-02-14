@@ -842,7 +842,7 @@ def mines_move(message):
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
 # ------------------- Dice Game (один игрок за раз) -------------------
-dice_current_game = None  # {"user_id": ..., "bet": ..., "choice": ...}
+dice_current_game = None  # {"user_id": ..., "bet": ..., "type": None}
 
 @bot.message_handler(commands=['бкубики'])
 def start_dice(message):
@@ -869,8 +869,11 @@ def start_dice(message):
         bot.send_message(message.chat.id, "✋ Подожди завершения игры у другого участника!")
         return
 
+    # Сразу списываем ставку
+    update_balance(user_id, balance - bet)
+
     # Создаем игру
-    dice_current_game = {"user_id": user_id, "bet": bet, "choice": None}
+    dice_current_game = {"user_id": user_id, "bet": bet, "type": None}
 
     markup = types.InlineKeyboardMarkup()
     markup.row(
@@ -895,28 +898,18 @@ def dice_play(call):
         bot.answer_callback_query(call.id, "❌ Игра не найдена или не твой ход")
         return
 
+    choice_type = call.data.split("_")[1]
+    dice_current_game["type"] = choice_type
+    chat_id = call.message.chat.id
     user_id = call.from_user.id
     bet = dice_current_game["bet"]
-    balance = get_balance(user_id)
-    choice_type = call.data.split("_")[1]
 
-    if balance < bet:
-        bot.answer_callback_query(call.id, "❌ Недостаточно средств")
-        dice_current_game = None
-        return
-
-    # Списываем ставку
-    update_balance(user_id, balance - bet)
-
-    # Если точное число, ждем от пользователя сообщение
     if choice_type == "exact":
-        bot.send_message(call.message.chat.id,
-                         "📌 Напишите число от 1 до 6 для ставки на точное число:")
-        dice_current_game["choice"] = "exact"
+        bot.send_message(chat_id, "📌 Напишите число от 1 до 6:")
         bot.answer_callback_query(call.id)
         return
 
-    # Бросок кубика
+    # Чёт или Нечёт
     dice_number = random.randint(1, 6)
     win = False
     multiplier = 2
@@ -935,31 +928,24 @@ def dice_play(call):
     else:
         result_text += f"😢 Ты проиграл {bet} монет."
 
-    bot.edit_message_text(result_text, call.message.chat.id, call.message.message_id)
-    dice_current_game = None  # игра завершена
+    bot.edit_message_text(result_text, chat_id, call.message.message_id)
+    dice_current_game = None
     bot.answer_callback_query(call.id)
 
 
 # --- Для точного числа ---
-@bot.message_handler(func=lambda m: dice_current_game and m.from_user.id == dice_current_game["user_id"] and dice_current_game.get("choice")=="exact")
+@bot.message_handler(func=lambda m: dice_current_game and m.from_user.id == dice_current_game["user_id"] and dice_current_game.get("type")=="exact")
 def dice_exact_number(message):
     global dice_current_game
     user_id = message.from_user.id
     text = message.text.strip()
 
-    if not text.isdigit():
+    if not text.isdigit() or not 1 <= int(text) <= 6:
         bot.send_message(message.chat.id, "❗ Напишите число от 1 до 6")
         return
+
     number = int(text)
-    if number < 1 or number > 6:
-        bot.send_message(message.chat.id, "❗ Число должно быть от 1 до 6")
-        return
-
     bet = dice_current_game["bet"]
-    balance = get_balance(user_id)
-
-    # Списываем ставку
-    update_balance(user_id, balance - bet)
 
     dice_number = random.randint(1, 6)
     multiplier = 6
