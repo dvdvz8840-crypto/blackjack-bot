@@ -169,11 +169,8 @@ def send_balance(message):
     first_name = message.from_user.first_name
     balance = get_balance(user_id)
 
-    # Здесь указываем ссылку на профиль
-    profile_link = "https://t.me/anileridine"
-
-    # HTML-ссылка на имя пользователя
-    name_link = f'<a href="{profile_link}">{first_name}</a>'
+    # Ссылка на профиль через tg://user?id=USER_ID
+    name_link = f'<a href="tg://user?id={user_id}">{first_name}</a>'
 
     bot.send_message(
         message.chat.id,
