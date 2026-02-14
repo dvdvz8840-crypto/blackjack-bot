@@ -167,10 +167,15 @@ def balance_text(message):
 def send_balance(message):
     user_id = message.from_user.id
     first_name = message.from_user.first_name
+    username = message.from_user.username  # Telegram username
     balance = get_balance(user_id)
 
-    # Ссылка на профиль через tg://user?id=USER_ID
-    name_link = f'<a href="tg://user?id={user_id}">{first_name}</a>'
+    if username:
+        # ссылка через https://t.me/username
+        name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
+    else:
+        # если нет username — просто имя
+        name_link = first_name
 
     bot.send_message(
         message.chat.id,
