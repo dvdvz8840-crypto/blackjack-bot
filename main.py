@@ -842,24 +842,23 @@ def mines_move(message):
 import random
 import time
 
-# cooldown для фарма, чтобы не было спама
 farming_cooldowns = {}
 
-@bot.message_handler(func=lambda m: m.text.lower() == "бфарм")
+@bot.message_handler(commands=['бфарм'])
 def farm_coins(message):
     user_id = message.from_user.id
     username = message.from_user.username
     first_name = message.from_user.first_name or "Игрок"
     now = int(time.time())
 
-    # Проверка общего КД 10 секунд между любыми вызовами команды
+    # КД 10 секунд между любыми вызовами команды
     if user_id in farming_cooldowns:
         last_time, status_cd = farming_cooldowns[user_id]
         if now - last_time < 10:
             bot.send_message(message.chat.id, "🕒 Подождите 10 сек. после отправки сообщения!")
             return
 
-    # Определяем текущий КД в зависимости от успеха/неудачи
+    # Проверка КД в зависимости от успеха/неудачи
     last_time, status_cd = farming_cooldowns.get(user_id, (0, "none"))
     if status_cd == "success" and now - last_time < 3600:
         remaining = 3600 - (now - last_time)
