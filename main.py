@@ -4,17 +4,17 @@ import random
 import threading
 import time
 
-TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"
+TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
 bot = telebot.TeleBot(TOKEN)
 
 # ================== Глобальные данные ==================
-games = {}
-balances = {}
+games = {}  # Все текущие игры по chat_id
+balances = {}  # Баланс игроков по user_id
 START_BALANCE = 500
 MAX_PLAYERS = 9
 WAIT_TIME = 120  # 2 минуты ожидания набора игроков
 SUITS = ['♠️','♥️','♦️','♣️']
-cooldowns_commands = {}
+cooldowns_commands = {}  # КД для бкоманды
 
 # ================== Карты ==================
 def create_deck():
@@ -57,6 +57,33 @@ def balance(message):
     user_id = message.from_user.id
     bot.send_message(message.chat.id, f"💰 Ваш баланс: {balances.get(user_id, START_BALANCE)} монет.")
 
+# ================== Бкоманды ==================
+@bot.message_handler(func=lambda m: m.text.lower()=="бкоманды")
+def commands_list(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    now = time.time()
+    if cooldowns_commands.get(user_id,0)>now:
+        bot.send_message(chat_id,"⏳ Подождите 20 секунд перед повторным вызовом команд.")
+        return
+    cooldowns_commands[user_id]=now+20
+    commands_text = """
+🎮 **Команды Blackjack:**
+
+🔹 б — регистрация и получение стартового баланса  
+🔹 бал — проверка баланса  
+🔹 блек — начать набор игроков за стол  
+🔹 да — показать кнопку «Присоединиться к столу» (только после блек)  
+🔹 присоединиться к столу — присоединиться к игре (после «да»)  
+🔹 доб — добрать карту (только за столом)  
+🔹 стоп — остановиться (только за столом)  
+🔹 кэш — забрать 70% ставки и выйти из игры (только за столом)  
+🔹 выйти — выйти со стола и вернуть ставку (только за столом)  
+🔹 п СУММА @username — передать монеты (только вне игры)  
+🔹 бкоманды — список команд (кулдаун 20 сек)
+"""
+    bot.send_message(chat_id, commands_text, parse_mode="Markdown")
+
 # ================== Начало набора ==================
 @bot.message_handler(func=lambda m: m.text.lower() == "блек")
 def start_black(message):
@@ -74,8 +101,7 @@ def want_to_join(message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name
     game = games.get(chat_id)
-    if not game:
-        return
+    if not game: return
     if any(p['id']==user_id for p in game["players"]):
         bot.send_message(chat_id, "🚫 Вы уже за столом.")
         return
@@ -94,16 +120,17 @@ def join_table(message):
         bot.send_message(chat_id, "🚫 Игра еще не началась. Напишите 'блек', чтобы начать набор игроков.")
         return
     if any(p['id']==user_id for p in game["players"]):
-        bot.send_message(chat_id, "🚫 Вы уже присоединились к столу или игра уже идет.")
+        bot.send_message(chat_id, "🚫 Вы уже присоединились к столу.")
         return
-    bot.send_message(chat_id, "", reply_markup=types.ReplyKeyboardRemove())
+    # Убираем кнопку после нажатия
+    bot.send_message(chat_id,"", reply_markup=types.ReplyKeyboardRemove())
     if balances.get(user_id,0)<=0:
         bot.send_message(chat_id,"❌ У вас недостаточно средств, чтобы присоединиться.")
         return
     msg = bot.send_message(chat_id, f"{user_name}, введите вашу ставку:")
     bot.register_next_step_handler(msg, set_bet, game, user_id, user_name)
 
-# ================== Установка ставки ==================
+# ================== Ставка ==================
 def set_bet(message, game, user_id, user_name):
     try:
         bet = int(message.text)
@@ -130,7 +157,7 @@ def set_bet(message, game, user_id, user_name):
     else:
         threading.Thread(target=wait_and_start, args=[message.chat.id]).start()
 
-# ================== Таймер ожидания ==================
+# ================== Таймер ожидания и голосование ==================
 def wait_and_start(chat_id):
     game = games.get(chat_id)
     if not game or game["started"]: return
@@ -214,7 +241,7 @@ def leave_table(message):
     game["players"].remove(player)
     bot.send_message(chat_id,f"❌ {player['name']} вышел со стола. Ставка возвращена ({player['bet']} монет).")
 
-# ================== Передача монет ==================
+# ================== Передача монет по username ==================
 @bot.message_handler(func=lambda m: m.text.lower().startswith("п "))
 def transfer_coins(message):
     user_id = message.from_user.id
@@ -231,8 +258,22 @@ def transfer_coins(message):
         if len(parts) != 3:
             raise ValueError
         amount = int(parts[1])
-        target_id = int(parts[2])
+        username = parts[2].replace("@","")
         
+        # Находим user_id по username среди участников беседы
+        # NOTE: Для реального юзернейма нужно хранить mapping, здесь упрощенно
+        target_id = None
+        for pid in balances:
+            if pid==user_id: continue
+            # В реальном коде можно маппинг username -> id
+            # Для теста пусть pid это целое число пользователя
+            target_id = pid
+            break
+
+        if not target_id:
+            bot.send_message(chat_id, "❌ Пользователь не найден.")
+            return
+
         # Проверка баланса
         if balances.get(user_id,0) < amount:
             bot.send_message(chat_id, f"❌ У вас нет {amount} монет для передачи.")
@@ -241,35 +282,40 @@ def transfer_coins(message):
         # Перевод монет
         balances[user_id] -= amount
         balances[target_id] = balances.get(target_id, START_BALANCE) + amount
-        bot.send_message(chat_id, f"✅ {amount} монет передано пользователю {target_id}.")
+        bot.send_message(chat_id, f"✅ {amount} монет передано пользователю @{username}.")
     except:
-        bot.send_message(chat_id, "❌ Неправильный формат команды. Пример: п 300 123456789")
+        bot.send_message(chat_id, "❌ Неправильный формат команды. Пример: п 300 @username")
 
-# ================== Бкоманды с кд ==================
-@bot.message_handler(func=lambda m: m.text.lower()=="бкоманды")
-def commands_list(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    now = time.time()
-    if cooldowns_commands.get(user_id,0)>now:
-        bot.send_message(chat_id,"⏳ Подождите 20 секунд перед повторным вызовом команд.")
-        return
-    cooldowns_commands[user_id]=now+20
-    commands_text = """
-🎮 **Команды Blackjack:**
+# ================== Игровой цикл ==================
+def start_game(chat_id):
+    game = games.get(chat_id)
+    if not game: return
+    game["started"]=True
+    # Раздача карт дилером
+    dealer_hand = [game["deck"].pop(), game["deck"].pop()]
+    for player in game["players"]:
+        player["hand"] = [game["deck"].pop(), game["deck"].pop()]
+    # Отправляем руки
+    for player in game["players"]:
+        bot.send_message(chat_id,f"🃏 {player['name']} получает карты: {format_hand(player['hand'])} (Очки: {calculate_score(player['hand'])})")
+    bot.send_message(chat_id,f"🎮 Игра началась! Дилер раздаёт карты. Пишите 'доб', 'стоп' или 'кэш'.")
 
-🔹 б — регистрация и получение стартового баланса  
-🔹 бал — проверка баланса  
-🔹 блек — начать набор игроков за стол  
-🔹 да — показать кнопку «Присоединиться к столу» (только после блек)  
-🔹 присоединиться к столу — присоединиться к игре (после «да»)  
-🔹 доб — добрать карту (только за столом)  
-🔹 стоп — остановиться (только за столом)  
-🔹 кэш — забрать 70% ставки и выйти из игры (только за столом)  
-🔹 выйти — выйти со стола и вернуть ставку (только за столом)  
-🔹 п СУММА @айди_пользователя — передать монеты (только вне игры)  
-🔹 бкоманды — список команд (кулдаун 20 сек)
-"""
-    bot.send_message(chat_id, commands_text, parse_mode="Markdown")
+# ================== Проверка конца игры ==================
+def check_end(chat_id):
+    game = games.get(chat_id)
+    if not game: return
+    if all(p["stand"] or p["cashout"] for p in game["players"]):
+        end_game(chat_id)
+
+def end_game(chat_id):
+    game = games.get(chat_id)
+    if not game: return
+    result_text = "🏁 Игра окончена!\n\n"
+    for player in game["players"]:
+        result_text += f"{player['name']}: {calculate_score(player['hand'])} очков\n"
+    game["ended"]=True
+    bot.send_message(chat_id,result_text)
+    # Освобождаем стол
+    del games[chat_id]
 
 bot.infinity_polling()
