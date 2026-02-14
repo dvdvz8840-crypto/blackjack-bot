@@ -3,6 +3,7 @@ from telebot import types
 import random
 import sqlite3
 import time
+import threading
 
 TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"  # <-- вставь сюда свой токен
 ADMIN_ID = 6151671553
@@ -42,9 +43,8 @@ def update_balance(user_id, amount):
     cursor.execute("UPDATE users SET balance=? WHERE user_id=?", (amount, user_id))
     conn.commit()
 
-# ---------------- Блэкджек ----------------
-games = {}
-cooldowns = {}
+# ---------------- Соло-игра ----------------
+solo_games = {}
 
 def create_deck():
     deck = [2,3,4,5,6,7,8,9,10,10,10,10,11]*4
@@ -73,11 +73,29 @@ def game_keyboard(can_double=False):
         )
     return markup
 
+# ---------------- Мульти-плеер ----------------
+multiplayer_games = {}  # key = chat_id
+
+def game_keyboard_multiplayer(can_double=False):
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🃏 Доб", callback_data="hit"),
+        types.InlineKeyboardButton("✋ Стоп", callback_data="stand")
+    )
+    markup.row(
+        types.InlineKeyboardButton("💰 Кэш 60%", callback_data="cash")
+    )
+    if can_double:
+        markup.row(
+            types.InlineKeyboardButton("🔥 Дабл", callback_data="double")
+        )
+    return markup
+
 # ---------------- Главные кнопки ----------------
 def main_menu_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("бал", "бкоманды")
-    markup.row("блек 100", "деньги")  # кнопка для ежедневной награды
+    markup.row("блек 100", "деньги")
     return markup
 
 # ---------------- Ежедневная награда ----------------
@@ -90,7 +108,7 @@ def can_claim_daily(user_id):
         conn.commit()
         return True, 0
     last = row[0]
-    if now - last >= 86400:  # 24 часа
+    if now - last >= 86400:
         return True, last
     return False, last
 
@@ -111,6 +129,8 @@ def claim_daily(user_id, amount=500):
         return False, f"{hours}ч {minutes}м {seconds}с"
 
 # ---------------- Команды ----------------
+cooldowns = {}
+
 @bot.message_handler(commands=["start"])
 def start(message):
     get_balance(message.from_user.id)
@@ -132,10 +152,11 @@ def commands(message):
     bot.send_message(message.chat.id,
                      "📜 <b>Команды BlackJack:</b>\n\n"
                      "💰 <b>бал</b> — проверить баланс\n"
-                     "🎰 <b>блек сумма</b> — начать игру\n"
+                     "🎰 <b>блек сумма</b> — начать соло-игру\n"
                      "💸 <b>перевод ID сумма</b> — перевести монеты\n"
                      "🎁 <b>деньги</b> — ежедневная награда\n"
-                     "📜 <b>бкоманды</b> — список команд", parse_mode="HTML")
+                     "📜 <b>бкоманды</b> — список команд\n"
+                     "🎲 <b>создать_игру сумма</b> — мульти-плеер", parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text.lower() == "бал")
 def balance_cmd(message):
@@ -151,6 +172,7 @@ def daily_reward(message):
     else:
         bot.send_message(message.chat.id, f"⏳ Ежедневная награда уже получена.\nДоступно через: {result}")
 
+# ---------------- Соло-игра ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("блек"))
 def blackjack(message):
     parts = message.text.split()
@@ -158,6 +180,9 @@ def blackjack(message):
         bot.send_message(message.chat.id, "❗ Используй: <b>блек сумма</b>", parse_mode="HTML")
         return
     bet = int(parts[1])
+    if bet < 100:
+        bot.send_message(message.chat.id, "❌ Минимальная ставка 100 монет!")
+        return
     user_id = message.from_user.id
     balance = get_balance(user_id)
     if bet <= 0 or bet > balance:
@@ -166,7 +191,7 @@ def blackjack(message):
     deck = create_deck()
     player = [deck.pop(), deck.pop()]
     dealer = [deck.pop(), deck.pop()]
-    games[user_id] = {"deck": deck, "player": player, "dealer": dealer, "bet": bet, "doubled": False}
+    solo_games[user_id] = {"deck": deck, "player": player, "dealer": dealer, "bet": bet, "doubled": False}
     update_balance(user_id, balance - bet)
     bot.send_message(
         message.chat.id,
@@ -178,74 +203,94 @@ def blackjack(message):
         reply_markup=game_keyboard(can_double=True)
     )
 
-# ---------------- Игровые кнопки ----------------
-@bot.callback_query_handler(func=lambda c: True)
-def game_actions(callback):
-    user_id = callback.from_user.id
-    if user_id not in games:
-        callback.answer("Игра не найдена.", show_alert=True)
+# ---------------- Мульти-плеер: создать комнату ----------------
+@bot.message_handler(func=lambda m: m.text.lower().startswith("создать_игру"))
+def create_multiplayer(message):
+    chat_id = message.chat.id
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.send_message(chat_id, "Используй: создать_игру <ставка>")
         return
-    game = games[user_id]
-    player = game["player"]
-    dealer = game["dealer"]
-    deck = game["deck"]
+    bet = int(parts[1])
+    if bet < 100:
+        bot.send_message(chat_id, "❌ Минимальная ставка 100 монет!")
+        return
+    if chat_id in multiplayer_games:
+        bot.send_message(chat_id, "⚠ Комната уже создана! Ожидайте завершения текущей игры.")
+        return
+
+    multiplayer_games[chat_id] = {
+        "players": {},
+        "deck": create_deck(),
+        "dealer": [],
+        "bet": bet,
+        "turn_order": [],
+        "current_turn": 0
+    }
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Присоединиться", callback_data=f"join_{chat_id}"))
+    bot.send_message(chat_id, f"🎲 Новая игра создана с ставкой {bet} монет.\nНажмите кнопку 'Присоединиться', чтобы вступить!", reply_markup=markup)
+
+    # Авто-старт через 2 минуты
+    threading.Timer(120, lambda: start_multiplayer_game(chat_id)).start()
+
+# ---------------- Мульти-плеер: присоединение ----------------
+@bot.callback_query_handler(func=lambda c: c.data.startswith("join_"))
+def join_game(callback):
+    user_id = callback.from_user.id
+    chat_id = int(callback.data.split("_")[1])
+    game = multiplayer_games.get(chat_id)
+    if not game:
+        callback.answer("Игра не найдена или завершена.", show_alert=True)
+        return
+    if len(game["players"]) >= 9:
+        callback.answer("⚠ Комната заполнена! Максимум 9 игроков.", show_alert=True)
+        return
+    if user_id in game["players"]:
+        callback.answer("Вы уже в игре! Ожидайте начала.", show_alert=True)
+        return
     bet = game["bet"]
+    balance = get_balance(user_id)
+    if balance < bet:
+        callback.answer("❌ Недостаточно монет для присоединения!", show_alert=True)
+        return
+    # Добавляем игрока
+    update_balance(user_id, balance - bet)
+    game["players"][user_id] = {"hand": [], "finished": False}
+    callback.answer(f"✅ Вы присоединились! Ожидайте начала игры.")
+    bot.send_message(user_id, f"🎲 Вы присоединились к игре с ставкой {bet} монет. Ожидайте начала игры!")
 
-    if callback.data == "hit":
-        player.append(deck.pop())
-        if hand_value(player) > 21:
-            del games[user_id]
-            bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                                  text=f"💥 <b>Перебор!</b>\n\nТвои карты: {player} ({hand_value(player)})\n\nТы проиграл {bet} монет.",
-                                  parse_mode="HTML")
-            return
-        bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                              text=f"🃏 Твои карты: {player} ({hand_value(player)})\n🎴 Карта дилера: {dealer[0]} + ❓",
-                              reply_markup=game_keyboard(), parse_mode="HTML")
+    # Обновляем сообщение в чате (для других)
+    bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=callback.message.message_id,
+        text=f"🎲 Игра создана! Ставка {bet} монет.\nПрисоединились {len(game['players'])} игроков.\nНажмите 'Присоединиться', чтобы вступить!",
+        reply_markup=callback.message.reply_markup
+    )
 
-    elif callback.data == "stand":
-        while hand_value(dealer) < 17:
-            dealer.append(deck.pop())
-        player_val = hand_value(player)
-        dealer_val = hand_value(dealer)
-        balance = get_balance(user_id)
-        if dealer_val > 21 or player_val > dealer_val:
-            win = int(bet * 2)
-            update_balance(user_id, balance + win)
-            text = f"🎉 <b>Ты выиграл!</b>\n+{win} монет"
-        elif player_val == dealer_val:
-            update_balance(user_id, balance + bet)
-            text = "🤝 Ничья. Ставка возвращена."
-        else:
-            text = f"😢 Ты проиграл {bet} монет."
-        del games[user_id]
-        bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                              text=f"{text}\n\n🃏 {player} ({player_val})\n🎴 {dealer} ({dealer_val})", parse_mode="HTML")
+# ---------------- Мульти-плеер: авто-старт ----------------
+def start_multiplayer_game(chat_id):
+    game = multiplayer_games.get(chat_id)
+    if not game:
+        return
+    if len(game["players"]) == 0:
+        bot.send_message(chat_id, "⚠ Игра отменена — никто не присоединился.")
+        del multiplayer_games[chat_id]
+        return
+    bot.send_message(chat_id, f"🎲 Игра начинается! {len(game['players'])} игроков присоединились.")
+    game["dealer"] = [game["deck"].pop(), game["deck"].pop()]
+    game["turn_order"] = list(game["players"].keys())
+    game["current_turn"] = 0
+    # Начало первого хода
+    first_player = game["turn_order"][0]
+    player_data = game["players"][first_player]
+    player_data["hand"] = [game["deck"].pop(), game["deck"].pop()]
+    bot.send_message(first_player, "🎰 Ваш ход!", reply_markup=game_keyboard_multiplayer(can_double=True))
 
-    elif callback.data == "cash":
-        balance = get_balance(user_id)
-        refund = int(bet * 0.6)
-        update_balance(user_id, balance + refund)
-        del games[user_id]
-        bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                              text=f"💰 Ты сделал кэшаут!\nВозвращено {refund} монет.", parse_mode="HTML")
-
-    elif callback.data == "double":
-        balance = get_balance(user_id)
-        if balance < bet:
-            callback.answer("Недостаточно средств для дабла.", show_alert=True)
-            return
-        update_balance(user_id, balance - bet)
-        game["bet"] *= 2
-        game["doubled"] = True
-        player.append(deck.pop())
-        if hand_value(player) > 21:
-            del games[user_id]
-            bot.edit_message_text(chat_id=callback.message.chat.id, message_id=callback.message.message_id,
-                                  text=f"💥 Перебор после дабла!\nТы проиграл {game['bet']} монет.", parse_mode="HTML")
-            return
-        callback.data = "stand"
-        game_actions(callback)
+# ---------------- TODO: Ходы и подсчёт для мульти-плеера ----------------
+# Логику кнопок Доб/Стоп/Дабл/Кэш для мульти-плеера можно вставить аналогично соло-игре,
+# проверяя очередь: user_id == turn_order[current_turn]
 
 # ---------------- Перевод ----------------
 @bot.message_handler(func=lambda m: m.text.lower().startswith("перевод"))
