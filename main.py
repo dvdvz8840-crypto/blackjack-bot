@@ -839,26 +839,22 @@ def mines_move(message):
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
 # ---------------- Фарминг монет ----------------
-import random
-import time
-
 farming_cooldowns = {}
 
-@bot.message_handler(commands=['бфарм'])
+@bot.message_handler(func=lambda m: m.text.lower() == "бфарм")
 def farm_coins(message):
     user_id = message.from_user.id
     username = message.from_user.username
     first_name = message.from_user.first_name or "Игрок"
     now = int(time.time())
 
-    # КД 10 секунд между любыми вызовами команды
+    # Глобальный КД 10 сек
     if user_id in farming_cooldowns:
         last_time, status_cd = farming_cooldowns[user_id]
         if now - last_time < 10:
             bot.send_message(message.chat.id, "🕒 Подождите 10 сек. после отправки сообщения!")
             return
 
-    # Проверка КД в зависимости от успеха/неудачи
     last_time, status_cd = farming_cooldowns.get(user_id, (0, "none"))
     if status_cd == "success" and now - last_time < 3600:
         remaining = 3600 - (now - last_time)
@@ -869,8 +865,7 @@ def farm_coins(message):
         bot.send_message(message.chat.id, f"⏱ Повторная попытка возможна через {remaining//60}м {remaining%60}с.")
         return
 
-    # Случайный шанс успеха
-    if random.randint(1, 100) <= 70:  # 70% шанс успеха
+    if random.randint(1, 100) <= 70:  # 70% успех
         amount = random.randint(50, 999)
         balance = get_balance(user_id)
         update_balance(user_id, balance + amount)
@@ -883,7 +878,7 @@ def farm_coins(message):
             parse_mode="HTML",
             disable_web_page_preview=True
         )
-    else:  # 30% шанс неудачи
+    else:
         farming_cooldowns[user_id] = (now, "fail")
         bot.send_message(
             message.chat.id,
