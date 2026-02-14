@@ -167,7 +167,12 @@ def balance_text(message):
 def send_balance(message):
     user_id = message.from_user.id
     balance = get_balance(user_id)
-    bot.send_message(message.chat.id, f"💰 Ваш баланс: {balance} монет")
+
+    bot.send_message(
+        message.chat.id,
+        f"💰 <b>Ваш баланс:</b> {balance} монет",
+        parse_mode="HTML"
+    )
 
 @bot.message_handler(func=lambda m: m.text.lower() == "деньги")
 def daily_reward(message):
