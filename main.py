@@ -3,7 +3,7 @@ import random
 import time
 from threading import Timer
 
-TOKEN = "8370621833:AAHFQZDvE0Rn-bmUwvXeB5H2IF6wv9BZbj4"
+TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -30,7 +30,7 @@ def calculate_score(hand):
     return score
 
 
-@bot.message_handler(commands=['блек'])
+@bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     if user_id not in balances:
@@ -38,7 +38,7 @@ def start(message):
     bot.reply_to(message, f"🎮 Добро пожаловать в Blackjack!\n💰 Твой баланс: {balances[user_id]}")
 
 
-@bot.message_handler(commands=['баланс'])
+@bot.message_handler(commands=['balance'])
 def balance(message):
     user_id = message.from_user.id
     if user_id not in balances:
@@ -46,7 +46,7 @@ def balance(message):
     bot.reply_to(message, f"💰 Твой баланс: {balances[user_id]}")
 
 
-@bot.message_handler(commands=['игра'])
+@bot.message_handler(commands=['blackjack'])
 def blackjack(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -97,12 +97,12 @@ def start_game(chat_id):
     for player in game["players"]:
         message_text += f"{player['name']}: {player['hand']} (Очки: {calculate_score(player['hand'])})\n"
 
-    message_text += "\nПишите /доб или /стоп"
+    message_text += "\nПишите /hit или /stand"
 
     bot.send_message(chat_id, message_text)
 
 
-@bot.message_handler(commands=['доб'])
+@bot.message_handler(commands=['hit'])
 def hit(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -127,7 +127,7 @@ def hit(message):
     check_end(chat_id)
 
 
-@bot.message_handler(commands=['стоп'])
+@bot.message_handler(commands=['stand'])
 def stand(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -159,7 +159,7 @@ def end_game(chat_id):
     winner = None
 
     for player in game["players"]:
-        score = calculate_score(player["доб"])
+        score = calculate_score(player["hand"])
         if score <= 21 and score > best_score:
             best_score = score
             winner = player
@@ -167,7 +167,7 @@ def end_game(chat_id):
     result_text = "🏁 Игра окончена!\n\n"
 
     for player in game["players"]:
-        score = calculate_score(player["доб"])
+        score = calculate_score(player["hand"])
         result_text += f"{player['name']}: {score}\n"
 
     if winner:
