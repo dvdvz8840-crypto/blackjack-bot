@@ -166,16 +166,14 @@ def balance_text(message):
 
 def send_balance(message):
     user_id = message.from_user.id
-    username = message.from_user.username
     first_name = message.from_user.first_name
     balance = get_balance(user_id)
 
-    if username:
-        # Кликабельная ссылка на профиль
-        name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
-    else:
-        # Если нет username — просто имя без ссылки
-        name_link = first_name
+    # Здесь указываем ссылку на профиль
+    profile_link = "https://t.me/anileridine"
+
+    # HTML-ссылка на имя пользователя
+    name_link = f'<a href="{profile_link}">{first_name}</a>'
 
     bot.send_message(
         message.chat.id,
