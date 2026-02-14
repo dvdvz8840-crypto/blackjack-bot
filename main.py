@@ -237,7 +237,6 @@ def blackjack(message):
                      reply_markup=game_keyboard(can_double=True))
 
 # ---------------- Игровые кнопки ----------------
-# ---------------- Игровые кнопки ----------------
 @bot.callback_query_handler(func=lambda c: c.data in ["hit", "stand", "cash", "double"])
 def game_actions(callback):
     user_id = callback.from_user.id
