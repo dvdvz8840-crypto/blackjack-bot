@@ -841,186 +841,141 @@ def mines_move(message):
                      f"✅ Шаг {game['step']} пройден! Текущий выигрыш: {game['current_win']} монет.\n"
                      f"Выберите следующую клетку от 1–25 или напишите 'Забрать'.")
                     
-import threading
+# ------------------- Dice Game (один игрок за раз) -------------------
+dice_current_game = None  # {"user_id": ..., "bet": ..., "choice": ...}
 
-# ------------------- ROULETTE -------------------
-roulette_red = {
-    1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36
-}
-
-roulette_black = {
-    2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35
-}
-
-roulette_state = {}  # message_id -> {"user_id":..., "bet":..., "choice":...}
-roulette_jackpot = 0
-roulette_stats = {}
-roulette_lock = set()  # user_id, кто сейчас крутит
-
-# --- Команда запуска рулетки ---
-@bot.message_handler(commands=['брулетка'])
-def roulette_start(message):
+@bot.message_handler(commands=['бкубики'])
+def start_dice(message):
+    global dice_current_game
     ensure_username(message)
+    user_id = message.from_user.id
     parts = message.text.split()
-    if len(parts) != 2:
-        bot.send_message(message.chat.id, "❗ Используй: /брулетка ставка")
-        return
-    try:
-        bet = int(parts[1])
-        if bet <= 0:
-            raise ValueError
-    except:
-        bot.send_message(message.chat.id, "❗ Ставка должна быть числом больше 0")
+
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.send_message(message.chat.id, "❗ Используй: /бкубики ставка")
         return
 
-    user_id = message.from_user.id
+    bet = int(parts[1])
     balance = get_balance(user_id)
+
+    if bet <= 0:
+        bot.send_message(message.chat.id, "❗ Ставка должна быть больше 0")
+        return
     if balance < bet:
         bot.send_message(message.chat.id, "❌ Недостаточно средств")
         return
 
-    # Ставка списывается только при вращении
+    if dice_current_game:
+        bot.send_message(message.chat.id, "✋ Подожди завершения игры у другого участника!")
+        return
+
+    # Создаем игру
+    dice_current_game = {"user_id": user_id, "bet": bet, "choice": None}
+
     markup = types.InlineKeyboardMarkup()
     markup.row(
-        types.InlineKeyboardButton("🔴 Красное x2", callback_data="roulette_red"),
-        types.InlineKeyboardButton("⚫ Черное x2", callback_data="roulette_black")
+        types.InlineKeyboardButton("🎲 Чёт", callback_data="dice_even"),
+        types.InlineKeyboardButton("🎲 Нечёт", callback_data="dice_odd")
     )
     markup.row(
-        types.InlineKeyboardButton("🟢 Зеленое x14", callback_data="roulette_green")
+        types.InlineKeyboardButton("🎯 Точное число 1-6", callback_data="dice_exact")
     )
 
-    bot.send_message(
-        message.chat.id,
-        f"🎰 <b>РУЛЕТКА</b>\n💰 Ставка: {bet}\n💎 Джекпот: {roulette_jackpot}\n\nВыбери цвет:",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
-    # Сохраняем состояние (ставка, юзер)
-    # Пока без choice, оно заполняется при нажатии кнопки
-    # message_id добавится автоматически при callback
-    # У нас callback обрабатывает user_id
-    roulette_state[user_id] = {"bet": bet}
+    bot.send_message(message.chat.id,
+                     f"🎲 <b>Dice Game</b>\nСтавка: {bet} монет\nВыберите вариант:",
+                     parse_mode="HTML",
+                     reply_markup=markup)
 
 
-# --- Callback рулетки ---
-@bot.callback_query_handler(func=lambda c: c.data.startswith("roulette_"))
-def roulette_play(call):
-    global roulette_jackpot
+# --- Callback Dice Game ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith("dice_"))
+def dice_play(call):
+    global dice_current_game
+    if not dice_current_game or call.from_user.id != dice_current_game["user_id"]:
+        bot.answer_callback_query(call.id, "❌ Игра не найдена или не твой ход")
+        return
 
     user_id = call.from_user.id
-    if user_id not in roulette_state:
-        bot.answer_callback_query(call.id, "❌ Игра не найдена или ставка не сделана")
-        return
-
-    if user_id in roulette_lock:
-        bot.answer_callback_query(call.id, "⏳ Рулетка уже крутится, подожди")
-        return
-
-    roulette_lock.add(user_id)
-
-    bet = roulette_state[user_id]["bet"]
-    choice = call.data.split("_")[1]
+    bet = dice_current_game["bet"]
     balance = get_balance(user_id)
+    choice_type = call.data.split("_")[1]
 
     if balance < bet:
         bot.answer_callback_query(call.id, "❌ Недостаточно средств")
-        roulette_lock.remove(user_id)
+        dice_current_game = None
         return
 
     # Списываем ставку
     update_balance(user_id, balance - bet)
 
-    # 1% в джекпот
-    jackpot_cut = max(int(bet * 0.01), 1)
-    roulette_jackpot += jackpot_cut
-
-    msg = call.message
-
-    # --- Функция вращения рулетки в отдельном потоке ---
-    def spin_roulette():
-        # 🎡 Анимация
-        for i in range(6):
-            try:
-                bot.edit_message_text(
-                    f"🎡 Крутим рулетку{'.' * (i % 3 + 1)}",
-                    msg.chat.id,
-                    msg.message_id
-                )
-            except:
-                pass
-            time.sleep(0.4)
-
-        # Выпадает число
-        number = random.randint(0, 36)
-        if number == 0:
-            result_color = "green"
-            emoji = "🟢"
-        elif number in roulette_red:
-            result_color = "red"
-            emoji = "🔴"
-        else:
-            result_color = "black"
-            emoji = "⚫"
-
-        win = False
-        multiplier = 0
-
-        if choice == result_color:
-            win = True
-            multiplier = 14 if result_color == "green" else 2
-
-        text_result = f"🎰 Выпало число: {number} {emoji}\n💎 Джекпот: {roulette_jackpot}\n\n"
-
-        if win:
-            win_amount = bet * multiplier
-            update_balance(user_id, get_balance(user_id) + win_amount)
-
-            # шанс 5% забрать джекпот при зеленом
-            if result_color == "green" and random.randint(1,100) <= 5:
-                update_balance(user_id, get_balance(user_id) + roulette_jackpot)
-                text_result += f"💎 ДЖЕКПОТ ВЫИГРАН: {roulette_jackpot}!\n"
-                roulette_jackpot = 0
-
-            text_result += f"🎉 Ты выиграл {win_amount} монет!"
-            roulette_stats[user_id] = roulette_stats.get(user_id, 0) + win_amount
-        else:
-            text_result += f"😢 Ты проиграл {bet} монет."
-
-        try:
-            bot.edit_message_text(
-                text_result,
-                msg.chat.id,
-                msg.message_id
-            )
-        except:
-            pass
-
-        roulette_lock.remove(user_id)
-        del roulette_state[user_id]
-
-    threading.Thread(target=spin_roulette).start()
-    bot.answer_callback_query(call.id, "🎲 Рулетка крутится!")
-
-
-# --- Рейтинг рулетки ---
-@bot.message_handler(commands=['брейтинг'])
-def roulette_rating(message):
-    if not roulette_stats:
-        bot.send_message(message.chat.id, "Пока нет победителей.")
+    # Если точное число, ждем от пользователя сообщение
+    if choice_type == "exact":
+        bot.send_message(call.message.chat.id,
+                         "📌 Напишите число от 1 до 6 для ставки на точное число:")
+        dice_current_game["choice"] = "exact"
+        bot.answer_callback_query(call.id)
         return
 
-    sorted_stats = sorted(roulette_stats.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 <b>ТОП ИГРОКОВ РУЛЕТКИ</b>\n\n"
-    for i, (user_id, amount) in enumerate(sorted_stats[:10], start=1):
-        cursor.execute("SELECT username, first_name FROM users WHERE user_id=?", (user_id,))
-        row = cursor.fetchone()
-        if row:
-            username = row[0] or str(user_id)
-        else:
-            username = str(user_id)
-        text += f"{i}. @{username} — {amount} монет\n"
-    bot.send_message(message.chat.id, text, parse_mode="HTML")
+    # Бросок кубика
+    dice_number = random.randint(1, 6)
+    win = False
+    multiplier = 2
+
+    if choice_type == "even" and dice_number % 2 == 0:
+        win = True
+    elif choice_type == "odd" and dice_number % 2 == 1:
+        win = True
+
+    result_text = f"🎲 Выпало: {dice_number}\n"
+
+    if win:
+        win_amount = bet * multiplier
+        update_balance(user_id, get_balance(user_id) + win_amount)
+        result_text += f"🎉 Ты выиграл {win_amount} монет!"
+    else:
+        result_text += f"😢 Ты проиграл {bet} монет."
+
+    bot.edit_message_text(result_text, call.message.chat.id, call.message.message_id)
+    dice_current_game = None  # игра завершена
+    bot.answer_callback_query(call.id)
+
+
+# --- Для точного числа ---
+@bot.message_handler(func=lambda m: dice_current_game and m.from_user.id == dice_current_game["user_id"] and dice_current_game.get("choice")=="exact")
+def dice_exact_number(message):
+    global dice_current_game
+    user_id = message.from_user.id
+    text = message.text.strip()
+
+    if not text.isdigit():
+        bot.send_message(message.chat.id, "❗ Напишите число от 1 до 6")
+        return
+    number = int(text)
+    if number < 1 or number > 6:
+        bot.send_message(message.chat.id, "❗ Число должно быть от 1 до 6")
+        return
+
+    bet = dice_current_game["bet"]
+    balance = get_balance(user_id)
+
+    # Списываем ставку
+    update_balance(user_id, balance - bet)
+
+    dice_number = random.randint(1, 6)
+    multiplier = 6
+    win = dice_number == number
+
+    result_text = f"🎲 Выпало: {dice_number}\n"
+
+    if win:
+        win_amount = bet * multiplier
+        update_balance(user_id, get_balance(user_id) + win_amount)
+        result_text += f"🎉 Поздравляем! Ты угадал число {number} и выиграл {win_amount} монет!"
+    else:
+        result_text += f"😢 Ты проиграл {bet} монет."
+
+    bot.send_message(message.chat.id, result_text)
+    dice_current_game = None
     
 # ------------------- Безопасный запуск бота -------------------
 import sys
