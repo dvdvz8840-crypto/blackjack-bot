@@ -125,16 +125,25 @@ def claim_daily(user_id, amount=500):
         return False, f"{hours}ч {minutes}м {seconds}с"
 
 # ---------------- Команды ----------------
-@bot.message_handler(commands=["start"])
-def start(message):
+@bot.message_handler(func=lambda m: m.text.lower() == "бкоманды")
+def commands(message):
     ensure_username(message)
-    get_balance(message.from_user.id)
+    user_id = message.from_user.id
+    now = time.time()
+    if user_id in cooldowns and now - cooldowns[user_id] < 60:
+        bot.send_message(message.chat.id, "⏳ Подожди 1 минуту перед повторным использованием команды.")
+        return
+    cooldowns[user_id] = now
     bot.send_message(message.chat.id,
-                     "🎰 Добро пожаловать в BlackJack!\n\n"
-                     "Используй кнопки или пиши команды.\n"
-                     "Нажми <b>бкоманды</b> чтобы увидеть все команды.",
-                     parse_mode="HTML",
-                     reply_markup=main_menu_keyboard())
+                     "📜 <b>Команды BlackJack:</b>\n\n"
+                     "💰 <b>бал</b> — проверить баланс\n"
+                     "🎰 <b>блек сумма</b> — начать игру\n"
+                     "💸 <b>перевод @username сумма</b> — перевести монеты\n"
+                     "🎁 <b>деньги</b> — ежедневная награда\n"
+                     "👑 <b>админвыдать @username сумма</b> — админ выдать монеты\n"
+                     "📜 <b>бкоманды</b> — список команд\n"
+                     "🏰 <b>бкинфо</b> — команды для работы с кланами",
+                     parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text.lower() == "бкоманды")
 def commands(message):
@@ -553,6 +562,156 @@ def end_multi_game(chat_id):
     bot.send_message(chat_id, text)
     bot.send_message(chat_id, "🎮 Мульти-игра завершена!")
     del multi_games[chat_id]
+    
+# ---------------- База данных для кланов ----------------
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS clans (
+    clan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS clan_members (
+    user_id INTEGER PRIMARY KEY,
+    clan_id INTEGER,
+    FOREIGN KEY(user_id) REFERENCES users(user_id),
+    FOREIGN KEY(clan_id) REFERENCES clans(clan_id)
+)
+""")
+conn.commit()
+
+# ---------------- Создать клан ----------------
+@bot.message_handler(func=lambda m: m.text.lower().startswith("бклан создать"))
+def create_clan(message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "❗ Используй: бклан создать <название клана>")
+        return
+    clan_name = parts[2].strip()
+    user_id = message.from_user.id
+    username = message.from_user.username
+
+    cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
+    if cursor.fetchone():
+        bot.send_message(message.chat.id, f"❌ Клан <b>{clan_name}</b> уже существует!", parse_mode="HTML")
+        return
+
+    cursor.execute("INSERT INTO clans (name) VALUES (?)", (clan_name,))
+    clan_id = cursor.lastrowid
+    cursor.execute("INSERT INTO clan_members (user_id, clan_id) VALUES (?, ?)", (user_id, clan_id))
+    conn.commit()
+
+    bot.send_message(message.chat.id, f"🏰 Клан <b>{clan_name}</b> создан! Ты автоматически вошёл в него.", parse_mode="HTML")
+
+# ---------------- Вступить в клан ----------------
+@bot.message_handler(func=lambda m: m.text.lower().startswith("бвступить"))
+def join_clan(message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.send_message(message.chat.id, "❗ Используй: бвступить <название клана>")
+        return
+    clan_name = parts[1].strip()
+    user_id = message.from_user.id
+
+    cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
+    row = cursor.fetchone()
+    if not row:
+        bot.send_message(message.chat.id, f"❌ Клан <b>{clan_name}</b> не найден!", parse_mode="HTML")
+        return
+
+    clan_id = row[0]
+    cursor.execute("SELECT clan_id FROM clan_members WHERE user_id=?", (user_id,))
+    if cursor.fetchone():
+        bot.send_message(message.chat.id, "⚠ Ты уже состоишь в клане. Сначала выйди командой бвыйти.")
+        return
+
+    cursor.execute("INSERT INTO clan_members (user_id, clan_id) VALUES (?, ?)", (user_id, clan_id))
+    conn.commit()
+    bot.send_message(message.chat.id, f"✅ Ты вступил в клан <b>{clan_name}</b>!", parse_mode="HTML")
+
+# ---------------- Выйти из клана ----------------
+@bot.message_handler(func=lambda m: m.text.lower() == "бвыйти")
+def leave_clan(message):
+    user_id = message.from_user.id
+    cursor.execute("SELECT c.name FROM clan_members cm JOIN clans c ON cm.clan_id=c.clan_id WHERE cm.user_id=?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        bot.send_message(message.chat.id, "⚠ Ты не состоишь в клане.")
+        return
+    clan_name = row[0]
+    cursor.execute("DELETE FROM clan_members WHERE user_id=?", (user_id,))
+    conn.commit()
+    bot.send_message(message.chat.id, f"🏹 Ты вышел из клана <b>{clan_name}</b>.", parse_mode="HTML")
+
+# ---------------- Список кланов ----------------
+@bot.message_handler(func=lambda m: m.text.lower() == "кланы")
+def list_clans(message):
+    cursor.execute("SELECT clan_id, name FROM clans")
+    clans = cursor.fetchall()
+    if not clans:
+        bot.send_message(message.chat.id, "🏰 <b>Кланы</b>\n\nПока нет ни одного клана.", parse_mode="HTML")
+        return
+
+    text = "🏰 <b>Кланы</b>\n\n"
+    for idx, (clan_id, name) in enumerate(clans, start=1):
+        cursor.execute("SELECT COUNT(*), SUM(balance) FROM clan_members cm JOIN users u ON cm.user_id=u.user_id WHERE cm.clan_id=?", (clan_id,))
+        row = cursor.fetchone()
+        members_count = row[0] if row[0] else 0
+        total_balance = row[1] if row[1] else 0
+        text += f"{idx}. {name} | 👤 {members_count} | 💰 {total_balance}\n"
+
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
+
+# ---------------- Список участников конкретного клана ----------------
+@bot.message_handler(func=lambda m: m.text.lower().startswith("буклана"))
+def clan_members_list(message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.send_message(message.chat.id, "❗ Используй: буклана <название клана>")
+        return
+    clan_name = parts[1].strip()
+    cursor.execute("SELECT clan_id FROM clans WHERE name=?", (clan_name,))
+    row = cursor.fetchone()
+    if not row:
+        bot.send_message(message.chat.id, f"❌ Клан <b>{clan_name}</b> не найден!", parse_mode="HTML")
+        return
+    clan_id = row[0]
+
+    cursor.execute("""
+        SELECT u.user_id, u.username, u.first_name, u.balance
+        FROM clan_members cm
+        JOIN users u ON cm.user_id=u.user_id
+        WHERE cm.clan_id=?
+    """, (clan_id,))
+    members = cursor.fetchall()
+    if not members:
+        bot.send_message(message.chat.id, f"⚠ В клане <b>{clan_name}</b> пока нет участников.", parse_mode="HTML")
+        return
+
+    text = f"🏰 <b>Участники клана {clan_name}</b>\n\n"
+    for idx, (user_id, username, first_name, balance) in enumerate(members, start=1):
+        if username:
+            name_link = f'<a href="https://t.me/{username}">{first_name}</a>'
+        else:
+            name_link = first_name
+        text += f"{idx}. {name_link} 💰 {balance}\n"
+
+    bot.send_message(message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True)
+
+# ---------------- Инфо по кланам (команда бкинфо) ----------------
+@bot.message_handler(func=lambda m: m.text.lower() == "бкинфо")
+def clan_commands_info(message):
+    ensure_username(message)
+    text = (
+        "🏰 <b>Команды для работы с кланами</b>\n\n"
+        "🛡 <b>бклан создать название_клана</b> — создать клан\n"
+        "🧍 <b>бвступить название_клана</b> — вступить в клан\n"
+        "🚪 <b>бвыйти</b> — выйти из клана\n"
+        "📜 <b>кланы</b> — список всех кланов\n"
+        "👥 <b>буклана название_клана</b> — список участников клана (с кликабельными именами)"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 # ---------------- Запуск ----------------
 bot.infinity_polling()
