@@ -156,7 +156,7 @@ def commands(message):
                      "📜 <b>бкоманды</b> — список команд",
                      parse_mode="HTML")
 
-@bot.message_handler(commands=['balance'])
+@bot.message_handler(commands=['bdbalance'])
 def balance_command(message):
     send_balance(message)
 
@@ -166,11 +166,18 @@ def balance_text(message):
 
 def send_balance(message):
     user_id = message.from_user.id
+    username = message.from_user.username
     balance = get_balance(user_id)
+
+    # Если нет юзернейма — используем имя
+    if username:
+        name = f"@{username}"
+    else:
+        name = message.from_user.first_name
 
     bot.send_message(
         message.chat.id,
-        f"💰 <b>Ваш баланс:</b> {balance} монет",
+        f"{name} 💰 <b>Ваш баланс:</b> {balance} монет",
         parse_mode="HTML"
     )
 
