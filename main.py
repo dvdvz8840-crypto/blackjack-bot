@@ -843,15 +843,11 @@ duels = {}  # chat_id -> duel
 
 @bot.message_handler(func=lambda m: m.text and "бдуэль" in m.text.lower())
 def start_duel(message):
-    if not message.text:
-        return
-
     parts = message.text.strip().split()
     if len(parts) < 3:
         bot.send_message(message.chat.id, "❗ Используй: бдуэль @username ставка")
         return
 
-    # получаем ник и ставку
     target_username = parts[1].lstrip("@").lower()
     try:
         bet = int(parts[2])
@@ -860,6 +856,11 @@ def start_duel(message):
         return
 
     player_id = message.from_user.id
+    player_username = message.from_user.username
+    player_name = message.from_user.first_name
+    player_balance = get_balance(player_id)
+
+    # Проверяем противника
     cursor.execute("SELECT user_id, balance, username, first_name FROM users WHERE LOWER(username)=?", (target_username,))
     row = cursor.fetchone()
     if not row:
@@ -867,7 +868,6 @@ def start_duel(message):
         return
 
     opp_id, opp_balance, opp_username, opp_name = row
-    player_balance = get_balance(player_id)
 
     if player_id == opp_id:
         bot.send_message(message.chat.id, "❌ Нельзя вызвать самого себя!")
@@ -883,14 +883,14 @@ def start_duel(message):
         bot.send_message(message.chat.id, "⚠ В этой беседе уже идет дуэль!")
         return
 
-    # снимаем ставки
+    # Снимаем ставки
     update_balance(player_id, player_balance - bet)
     update_balance(opp_id, opp_balance - bet)
 
-    # создаем дуэль
+    # Создаем дуэль
     duels[message.chat.id] = {
         "players": {
-            player_id: {"username": message.from_user.username, "first_name": message.from_user.first_name},
+            player_id: {"username": player_username, "first_name": player_name},
             opp_id: {"username": opp_username, "first_name": opp_name}
         },
         "turn": player_id,
@@ -899,6 +899,7 @@ def start_duel(message):
     }
 
     send_duel_status(message.chat.id)
+
 
 def send_duel_status(chat_id):
     duel = duels[chat_id]
@@ -917,6 +918,7 @@ def send_duel_status(chat_id):
     )
 
     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
 
 @bot.callback_query_handler(func=lambda call: call.data and ("shield_" in call.data or "shoot_" in call.data))
 def duel_action(call):
